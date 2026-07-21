@@ -76,7 +76,7 @@ ORDER_MAPPING = {
 DECIMAL_COLUMNS = ['Carat', 'RapRate', 'Reserve%', 'Rate', 'Amount', 'Ratio', 'Dep', 'Tab', 'Girdle', 'C/A', 'C/H', 'P/A', 'P/H', 'Disc%', 'Price/carat', 'Total Amount', 'Depth', 'Table']
 
 DESIRED_COLUMN_SEQUENCE = [
-    "Sr.No", "Tag_No", "Serial No", "DETAIL", "Shp", "Carat", "Color", "Qua", "Cut", "Pol", "Sym",
+    "Sr.No", "Tag_No", "Serial No", "DETAIL", "Shp", "Carat", "Carat_grp", "Color", "Qua", "Cut", "Pol", "Sym",
     "Flo", "Lab", "ReportNo", "RapRate", "Reserve%", "Disc%", "Rate", "Amount", "Measurement",
     "Dep", "Tab", "Ratio", "Shade", "Milky", "E.Facet", "TOIN_NAME", "SOIN_NAME", "GIRDLE_OPEN_NAME", "PAV_OPEN_NAME", "TBINC_NAME", "SBINC_NAME", "Remarks"
 ]
