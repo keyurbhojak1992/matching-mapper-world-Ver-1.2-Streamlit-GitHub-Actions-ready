@@ -123,7 +123,7 @@ def _show_github_job_panel() -> None:
     st.markdown("#### Submitted full-run job")
     settings = _github_job_settings()
     if settings is None:
-        st.error("GitHub background-job settings are no longer available in Streamlit secrets.")
+        st.error("Background-job settings are no longer available in Strmlt secrets.")
         return
 
     backend = GitHubReleaseBackend(settings)
@@ -131,7 +131,7 @@ def _show_github_job_panel() -> None:
     try:
         snapshot = backend.job_snapshot(int(job["release_id"]))
     except Exception as exc:
-        st.warning(f"Unable to refresh the private GitHub job right now: {exc}")
+        st.warning(f"Unable to refresh the private job right now: {exc}")
 
     status_payload = snapshot.get("status", {}) if snapshot else {}
     state = str(status_payload.get("state") or job.get("status", "submitted"))
@@ -150,11 +150,11 @@ def _show_github_job_panel() -> None:
         progress_label = "Queued" if state in {"queued", "submitted", "starting"} else "Preparing"
     columns[3].metric("Batch progress", progress_label)
     st.code(str(job["tag_name"]), language="text")
-    message = str(status_payload.get("message", "Waiting for the GitHub Actions runner."))
+    message = str(status_payload.get("message", "Waiting for the Actions runner."))
     st.caption(message)
     worker_version = status_payload.get("worker_version")
     if worker_version:
-        st.caption(f"GitHub worker version: {worker_version}")
+        st.caption(f"Worker version: {worker_version}")
     if isinstance(current_batch, int) and isinstance(total_batches, int) and total_batches > 0:
         st.progress(min(max(current_batch / total_batches, 0.0), 1.0))
 
@@ -725,8 +725,8 @@ def suggested_page() -> None:
     processing_mode = st.radio(
         "Choose where the Suggested Stock Mapper runs",
         [
-            "GitHub Actions full run (recommended)",
-            "Run inside this Streamlit app (small test only)",
+            "Actions full run (recommended)",
+            "Run inside this Strmlt app (small test only)",
         ],
         horizontal=True,
         help="GitHub Actions keeps the heavy Excel work away from Streamlit Community Cloud's smaller app server.",
