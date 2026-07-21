@@ -1,0 +1,5 @@
+Copyright © 2026 Keyur Bhojak. All rights reserved.
+
+This repository and its processing logic are proprietary. No permission is granted
+to copy, redistribute, sublicense, publish, sell, or create derivative works without
+prior written permission from the copyright owner.

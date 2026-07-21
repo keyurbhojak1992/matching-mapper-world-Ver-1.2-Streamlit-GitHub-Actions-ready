@@ -1,0 +1,181 @@
+name: Process Suggested Stock Mapper job
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_id:
+        description: Private draft release ID containing input_bundle.zip
+        required: true
+        type: string
+      job_tag:
+        description: Matching Mapper job tag
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  process:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    concurrency:
+      group: matching-mapper-suggested
+      cancel-in-progress: false
+
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_ID: ${{ inputs.release_id }}
+      JOB_TAG: ${{ inputs.job_tag }}
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - name: Check out private repository
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Verify deployed project version
+        run: |
+          printf 'Matching Mapper World version: '
+          cat VERSION.txt
+
+      - name: Set up Python
+        uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-worker.txt
+
+      - name: Install worker dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-worker.txt
+
+      - name: Download private job input
+        run: |
+          mkdir -p .cloud-job
+          printf '%s\n' \
+            'Status: STARTING' \
+            "Job: ${JOB_TAG}" \
+            'The GitHub Actions worker is preparing the input files.' \
+            > .cloud-job/release-body.txt
+          python -m cloud_worker.release_assets update-body \
+            --release-id "${RELEASE_ID}" \
+            --body-file .cloud-job/release-body.txt
+          python -m cloud_worker.release_assets download \
+            --release-id "${RELEASE_ID}" \
+            --name input_bundle.zip \
+            --output .cloud-job/input_bundle.zip
+
+      - name: Process batches and publish private results
+        shell: bash
+        run: |
+          set +e
+
+          printf '%s\n' \
+            'Status: RUNNING' \
+            "Job: ${JOB_TAG}" \
+            'The Suggested Stock Mapper is processing isolated salesperson batches.' \
+            > .cloud-job/release-body.txt
+          python -m cloud_worker.release_assets update-body \
+            --release-id "${RELEASE_ID}" \
+            --body-file .cloud-job/release-body.txt || true
+
+          python -m cloud_worker.run_job \
+            --bundle .cloud-job/input_bundle.zip \
+            --work-dir .cloud-job/work \
+            --result .cloud-job/suggested_reports_final_combined.zip \
+            --status .cloud-job/job_status.json \
+            --manifest .cloud-job/batch_manifest.json \
+            --log .cloud-job/processing_log.txt \
+            --failure .cloud-job/failure_log.txt \
+            > .cloud-job/worker_console.txt 2>&1 &
+          worker_pid=$!
+
+          while kill -0 "${worker_pid}" 2>/dev/null; do
+            sleep 30
+            if [ -f .cloud-job/job_status.json ]; then
+              python -m cloud_worker.release_assets upload \
+                --release-id "${RELEASE_ID}" \
+                --file .cloud-job/job_status.json \
+                --name job_status.json || true
+            fi
+          done
+
+          wait "${worker_pid}"
+          worker_exit=$?
+
+          if [ -f .cloud-job/job_status.json ]; then
+            python -m cloud_worker.release_assets upload \
+              --release-id "${RELEASE_ID}" \
+              --file .cloud-job/job_status.json \
+              --name job_status.json || true
+          fi
+
+          publish_exit=0
+          if [ -f .cloud-job/suggested_reports_final_combined.zip ]; then
+            python -m cloud_worker.release_assets upload \
+              --release-id "${RELEASE_ID}" \
+              --file .cloud-job/suggested_reports_final_combined.zip \
+              --name suggested_reports_final_combined.zip || publish_exit=1
+          elif [ "${worker_exit}" -eq 0 ]; then
+            echo 'Worker succeeded but the final result ZIP is missing.' >> .cloud-job/failure_log.txt
+            publish_exit=1
+          fi
+
+          for asset in batch_manifest.json processing_log.txt worker_console.txt failure_log.txt
+          do
+            if [ -f ".cloud-job/${asset}" ]; then
+              python -m cloud_worker.release_assets upload \
+                --release-id "${RELEASE_ID}" \
+                --file ".cloud-job/${asset}" \
+                --name "${asset}" || true
+            fi
+          done
+
+          final_exit="${worker_exit}"
+          if [ "${publish_exit}" -ne 0 ]; then
+            final_exit=1
+            python - <<'PY_STATUS'
+          import json
+          from datetime import datetime, timezone
+          from pathlib import Path
+          path = Path('.cloud-job/job_status.json')
+          payload = json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
+          payload.update({
+              'state': 'failed',
+              'message': 'Processing finished, but the final result could not be published to the private GitHub release.',
+              'completed_at': datetime.now(timezone.utc).isoformat(),
+              'updated_at': datetime.now(timezone.utc).isoformat(),
+          })
+          path.write_text(json.dumps(payload, indent=2), encoding='utf-8')
+          PY_STATUS
+            python -m cloud_worker.release_assets upload \
+              --release-id "${RELEASE_ID}" \
+              --file .cloud-job/job_status.json \
+              --name job_status.json || true
+          fi
+
+          python -m cloud_worker.release_assets delete \
+            --release-id "${RELEASE_ID}" \
+            --name input_bundle.zip || true
+
+          if [ "${final_exit}" -eq 0 ]; then
+            printf '%s\n' \
+              'Status: COMPLETED' \
+              "Job: ${JOB_TAG}" \
+              'The private result ZIP is ready. Download it in the Streamlit app, then delete the job files.' \
+              > .cloud-job/release-body.txt
+          else
+            printf '%s\n' \
+              'Status: FAILED' \
+              "Job: ${JOB_TAG}" \
+              'The worker ended with an error. Review job_status.json, failure_log.txt, and worker_console.txt.' \
+              > .cloud-job/release-body.txt
+          fi
+          python -m cloud_worker.release_assets update-body \
+            --release-id "${RELEASE_ID}" \
+            --body-file .cloud-job/release-body.txt || true
+
+          exit "${final_exit}"
