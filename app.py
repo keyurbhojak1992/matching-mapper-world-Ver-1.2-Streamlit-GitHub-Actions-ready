@@ -154,7 +154,7 @@ def _show_github_job_panel() -> None:
     st.caption(message)
     worker_version = status_payload.get("worker_version")
     if worker_version:
-        st.caption(f"Worker version: {worker_version}")
+        st.caption(f"GitHub worker version: {worker_version}")
     if isinstance(current_batch, int) and isinstance(total_batches, int) and total_batches > 0:
         st.progress(min(max(current_batch / total_batches, 0.0), 1.0))
 
@@ -725,7 +725,7 @@ def suggested_page() -> None:
     processing_mode = st.radio(
         "Choose where the Suggested Stock Mapper runs",
         [
-            "Actions full run (recommended)",
+            "GitHub Actions full run (recommended)",
             "Run inside this Streamlit app (small test only)",
         ],
         horizontal=True,
