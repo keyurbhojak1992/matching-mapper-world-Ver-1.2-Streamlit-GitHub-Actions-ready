@@ -126,7 +126,7 @@ def run_job(arguments: argparse.Namespace) -> int:
         "schema_version": 2,
         "worker_version": WORKER_VERSION,
         "state": "starting",
-        "message": "Preparing the GitHub Actions worker.",
+        "message": "Preparing full processing.",
         "started_at": _utc_now(),
         "updated_at": _utc_now(),
     }
@@ -177,7 +177,7 @@ def run_job(arguments: argparse.Namespace) -> int:
                 "scope": scope,
                 "batch_size": batch_size,
                 "state": "running",
-                "message": "Inputs extracted; starting batch processing.",
+                "message": "Files are ready; starting processing.",
                 "updated_at": _utc_now(),
             }
         )
@@ -218,7 +218,7 @@ def run_job(arguments: argparse.Namespace) -> int:
             size_gib = result_path.stat().st_size / (1024 ** 3)
             result_path.unlink(missing_ok=True)
             raise ValueError(
-                "The combined result is too large for one GitHub release asset "
+                "The combined result exceeds the maximum supported download size "
                 f"({size_gib:.2f} GiB). Reduce output options or submit a smaller salesperson selection."
             )
 

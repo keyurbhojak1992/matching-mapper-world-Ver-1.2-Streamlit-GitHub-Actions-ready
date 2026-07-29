@@ -34,6 +34,7 @@ def apply_theme() -> None:
             color: var(--mm-text);
         }}
         [data-testid="stHeader"] {{ background: rgba(247,249,255,.72); backdrop-filter: blur(16px); }}
+        #MainMenu, footer, [data-testid="stToolbar"], [data-testid="stDecoration"] {{ display:none !important; }}
         [data-testid="stSidebar"] {{
             background: rgba(255,255,255,.94);
             border-right: 1px solid var(--mm-border);
@@ -133,14 +134,14 @@ def hero() -> None:
         f"""
         <section class="mm-hero">
           <div>
-            <div class="mm-kicker">Diamond intelligence • matching automation</div>
+            <div class="mm-kicker">Diamond intelligence • smart matching</div>
             <h1>Matching Mapper World</h1>
-            <p>One professional workspace for suggested-stock generation, demand-filter matching, output prioritization and workbook separation—powered by Logic base.</p>
+            <p>One professional workspace for suggested-stock generation, demand-filter matching, output prioritization, and workbook separation—designed for clear, reliable daily use.</p>
             <div class="mm-chip-row">
-              <span class="mm-chip">4 production workflows</span><span class="mm-chip">Exact & tolerance matching</span><span class="mm-chip">XLSX / Parquet / ZIP</span>
+              <span class="mm-chip">4 ready-to-use services</span><span class="mm-chip">Exact & tolerance matching</span><span class="mm-chip">Flexible file support</span>
             </div>
           </div>
-          <div class="mm-hero-visual"><img src="{visual}" alt="Diamond matching data workflow" /></div>
+          <div class="mm-hero-visual"><img src="{visual}" alt="Diamond matching overview" /></div>
         </section>
         """,
         unsafe_allow_html=True,

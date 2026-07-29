@@ -52,9 +52,9 @@ class GitHubCloudConfig:
         ref = str(values.get("ref", values.get("branch", DEFAULT_REF))).strip() or DEFAULT_REF
 
         if repository.count("/") != 1 or any(part.strip() == "" for part in repository.split("/")):
-            raise GitHubJobError("GitHub repository must use OWNER/REPOSITORY format.")
+            raise GitHubJobError("The full-processing location is not configured correctly.")
         if not token:
-            raise GitHubJobError("The GitHub fine-grained token is missing.")
+            raise GitHubJobError("The full-processing access setting is missing.")
         return cls(repository=repository, token=token, workflow=workflow, ref=ref)
 
 
@@ -90,14 +90,14 @@ class GitHubReleaseBackend:
                     detail += f" Errors: {payload['errors']}"
             except (ValueError, TypeError):
                 pass
-            raise GitHubJobError(f"GitHub API request failed ({response.status_code}): {detail}")
+            raise GitHubJobError(f"The processing service could not complete the request ({response.status_code}). Please try again.")
         return response
 
     def check_connection(self, *, require_private: bool = True) -> dict[str, Any]:
         repository = self._request("GET", self.repository_api).json()
         if require_private and not bool(repository.get("private")):
             raise GitHubJobError(
-                "The configured GitHub repository is public. Use a private repository before uploading business files."
+                "The secure processing area must be private before business files can be uploaded."
             )
         return repository
 
@@ -171,7 +171,7 @@ class GitHubReleaseBackend:
                 detail = str(response.json().get("message") or detail)
             except (ValueError, TypeError):
                 pass
-            raise GitHubJobError(f"GitHub asset upload failed ({response.status_code}): {detail}")
+            raise GitHubJobError(f"A file could not be transferred for processing ({response.status_code}). Please try again.")
         return response.json()
 
     def dispatch(self, *, release_id: int, job_tag: str) -> None:
@@ -197,7 +197,7 @@ class GitHubReleaseBackend:
             )
             self.update_release_body(
                 int(release["id"]),
-                "Status: QUEUED\nInput uploaded. Waiting for the private GitHub Actions worker.",
+                "Status: QUEUED\nFiles received. Waiting for processing to start.",
             )
             self.dispatch(release_id=int(release["id"]), job_tag=job_tag)
             return release
@@ -257,7 +257,7 @@ class GitHubReleaseBackend:
             timeout=(30, 300),
         ) as response:
             if response.status_code >= 400:
-                raise GitHubJobError(f"Unable to download GitHub asset ({response.status_code}).")
+                raise GitHubJobError(f"Unable to download the requested file ({response.status_code}).")
             chunks: list[bytes] = []
             total = 0
             for chunk in response.iter_content(chunk_size=64 * 1024):
@@ -273,7 +273,7 @@ class GitHubReleaseBackend:
         try:
             return json.loads(self.download_asset_bytes(asset).decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise GitHubJobError(f"The GitHub job status file is invalid: {exc}") from exc
+            raise GitHubJobError(f"The request status could not be read.") from exc
 
     def job_snapshot(self, release_id: int) -> dict[str, Any]:
         release = self.get_release(release_id)
@@ -286,13 +286,13 @@ class GitHubReleaseBackend:
             body = str(release.get("body", ""))
             if "Status: RUNNING" in body:
                 state = "running"
-                message = "The GitHub runner is processing this job."
+                message = "Your request is being processed."
             elif "Status: FAILED" in body:
                 state = "failed"
-                message = "The GitHub worker failed."
+                message = "Processing could not be completed."
             else:
                 state = "queued"
-                message = "Waiting for the GitHub Actions runner."
+                message = "Waiting for processing to start."
             status = {"state": state, "message": message}
 
         result_present = RESULT_ASSET_NAME in by_name or LEGACY_RESULT_ASSET_NAME in by_name
@@ -322,7 +322,7 @@ class GitHubReleaseBackend:
             if response.status_code in {301, 302, 303, 307, 308}:
                 return response.headers.get("Location")
             if response.status_code >= 400:
-                raise GitHubJobError(f"Unable to create a GitHub download link ({response.status_code}).")
+                raise GitHubJobError(f"Unable to create a download link ({response.status_code}).")
             # Some GitHub/API configurations stream a 200 response directly.
             # Do not buffer it here; the caller will use the disk-streaming fallback.
             return None
@@ -339,7 +339,7 @@ class GitHubReleaseBackend:
             timeout=(30, 1800),
         ) as response:
             if response.status_code >= 400:
-                raise GitHubJobError(f"Unable to download GitHub asset ({response.status_code}).")
+                raise GitHubJobError(f"Unable to download the requested file ({response.status_code}).")
             with target.open("wb") as handle:
                 for chunk in response.iter_content(chunk_size=1024 * 1024):
                     if chunk:
@@ -358,5 +358,5 @@ class GitHubReleaseBackend:
             )
             if response.status_code not in {204, 404, 422}:
                 raise GitHubJobError(
-                    f"The job release was deleted, but its tag could not be removed ({response.status_code})."
+                    f"The temporary request files were deleted, but final cleanup could not be completed ({response.status_code})."
                 )

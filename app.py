@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import re
 import tempfile
 import zipfile
 from pathlib import Path
@@ -79,6 +80,43 @@ def _save_result(key: str, data: bytes, filename: str, logs: str) -> None:
     st.session_state[key] = {"data": data, "filename": filename, "logs": logs}
 
 
+def _friendly_message(value: object, fallback: str = "The request could not be completed.") -> str:
+    text = str(value or "").strip()
+    if not text:
+        return fallback
+    replacements = (
+        ("GitHub Actions", "the processing service"),
+        ("GitHub", "the processing service"),
+        ("Streamlit Community Cloud", "the online application"),
+        ("Streamlit", "the application"),
+        ("repository", "secure workspace"),
+        ("Repository", "Secure workspace"),
+        ("background worker", "processing service"),
+        ("worker", "processor"),
+        ("runner", "processor"),
+        ("REST API", "service"),
+        ("API", "service"),
+        ("release asset", "result file"),
+        ("release", "request"),
+        ("secrets", "settings"),
+        ("workflow", "process"),
+        ("manifest", "summary"),
+        ("batches", "groups"),
+        ("batch", "group"),
+    )
+    for old, new in replacements:
+        text = text.replace(old, new)
+    text = re.sub(r"https?://\S+", "", text)
+    text = re.sub(r"(?:[A-Za-z]:)?[/\\](?:[^\s:/\\]+[/\\])+[^\s:/\\]+", "an internal file", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text or fallback
+
+
+def _show_user_error(context: str, exc: object | None = None) -> None:
+    detail = _friendly_message(exc, "") if exc is not None else ""
+    st.error(f"{context}{': ' + detail if detail else '.'}")
+
+
 def _show_result(key: str, label: str) -> None:
     result = st.session_state.get(key)
     if not result:
@@ -103,8 +141,8 @@ def _show_result(key: str, label: str) -> None:
         key=f"download_{key}",
         on_click="ignore",
     )
-    with st.expander("Processing log", expanded=False):
-        st.code(result["logs"] or "Process completed.", language="text")
+    with st.expander("Processing details", expanded=False):
+        st.write("Your files were processed successfully and the download package is ready.")
 
 
 def _github_job_settings() -> GitHubCloudConfig | None:
@@ -120,10 +158,10 @@ def _show_github_job_panel() -> None:
     if not job:
         return
 
-    st.markdown("#### Submitted full-run job")
+    st.markdown("#### Submitted full processing request")
     settings = _github_job_settings()
     if settings is None:
-        st.error("GitHub background-job settings are no longer available in Streamlit secrets.")
+        st.error("Full processing is not available right now. Please contact the administrator.")
         return
 
     backend = GitHubReleaseBackend(settings)
@@ -131,13 +169,13 @@ def _show_github_job_panel() -> None:
     try:
         snapshot = backend.job_snapshot(int(job["release_id"]))
     except Exception as exc:
-        st.warning(f"Unable to refresh the private GitHub job right now: {exc}")
+        st.warning(f"Unable to refresh this request right now: {_friendly_message(exc)}")
 
     status_payload = snapshot.get("status", {}) if snapshot else {}
     state = str(status_payload.get("state") or job.get("status", "submitted"))
     columns = st.columns(4)
-    columns[0].metric("Job status", state.replace("_", " ").title())
-    columns[1].metric("Batch size", str(job.get("batch_size", 3)))
+    columns[0].metric("Request status", state.replace("_", " ").title())
+    columns[1].metric("Salespeople per group", str(job.get("batch_size", 3)))
     columns[2].metric("Salespeople", str(status_payload.get("total_salespeople", job.get("salespeople_count", "Pending"))))
     current_batch = status_payload.get("current_batch")
     total_batches = status_payload.get("total_batches")
@@ -148,13 +186,10 @@ def _show_github_job_panel() -> None:
         progress_label = f"{completed_count}/{total_batches}"
     else:
         progress_label = "Queued" if state in {"queued", "submitted", "starting"} else "Preparing"
-    columns[3].metric("Batch progress", progress_label)
-    st.code(str(job["tag_name"]), language="text")
-    message = str(status_payload.get("message", "Waiting for the GitHub Actions runner."))
-    st.caption(message)
-    worker_version = status_payload.get("worker_version")
-    if worker_version:
-        st.caption(f"GitHub worker version: {worker_version}")
+    columns[3].metric("Group progress", progress_label)
+    st.caption(f"Reference ID: {job['tag_name']}")
+    message = str(status_payload.get("message", "Waiting for processing to start."))
+    st.caption(_friendly_message(message, "Processing status is being updated."))
     if isinstance(current_batch, int) and isinstance(total_batches, int) and total_batches > 0:
         st.progress(min(max(current_batch / total_batches, 0.0), 1.0))
 
@@ -188,13 +223,13 @@ def _show_github_job_panel() -> None:
                 st.session_state.pop("github_suggested_download", None)
             else:
                 target = Path(tempfile.gettempdir()) / f"{job['tag_name']}_{result_asset_name}"
-                with st.spinner("Downloading the private result to the Streamlit server..."):
+                with st.spinner("Preparing your result for download..."):
                     backend.download_asset_to_path(asset, target)
                 st.session_state["github_suggested_download"] = str(target)
                 st.session_state.pop("github_suggested_download_url", None)
             st.rerun()
         except Exception as exc:
-            st.exception(exc)
+            _show_user_error("Unable to complete this action", exc)
 
     confirm_delete = cleanup.checkbox("Allow cleanup", key="confirm_github_cleanup")
     if cleanup.button(
@@ -202,7 +237,7 @@ def _show_github_job_panel() -> None:
         use_container_width=True,
         disabled=not confirm_delete,
         key="delete_github_job",
-        help="Deletes the private draft release, result files, and temporary tag after you have downloaded the result.",
+        help="Deletes temporary processing files after you have downloaded the result.",
     ):
         try:
             backend.delete_job(int(job["release_id"]), tag_name=str(job.get("tag_name", "")))
@@ -211,10 +246,10 @@ def _show_github_job_panel() -> None:
             if download_path:
                 Path(download_path).unlink(missing_ok=True)
             st.session_state.pop("github_suggested_job", None)
-            st.success("Temporary GitHub job files were deleted.")
+            st.success("Temporary processing files were deleted.")
             st.rerun()
         except Exception as exc:
-            st.exception(exc)
+            _show_user_error("Unable to complete this action", exc)
 
     download_url = st.session_state.get("github_suggested_download_url")
     if download_url:
@@ -243,26 +278,23 @@ def _show_github_job_panel() -> None:
             )
 
     if failure_ready or state == "failed":
-        st.error(
-            "The background worker reported a failure. Open the repository's Actions page or inspect "
-            "failure_log.txt and worker_console.txt in the private draft release."
-        )
+        st.error("Processing could not be completed. Please retry or contact support with the reference ID shown above.")
     elif state == "partial_success":
-        st.warning("The result is ready, but at least one batch failed or was skipped. Review batch_manifest.json.")
+        st.warning("The result is ready, but one or more groups could not be completed. You may download the available result or try again.")
 
 
 def _show_github_recovery_panel(settings: GitHubCloudConfig | None) -> None:
     if settings is None:
         return
-    with st.expander("Recover a previous full-run job", expanded=False):
+    with st.expander("Recover a previous full processing request", expanded=False):
         backend = GitHubReleaseBackend(settings)
         manual_tag = st.text_input(
-            "Job tag",
+            "Reference ID",
             placeholder="mmw-job-YYYYMMDD-HHMMSS-xxxxxxxx",
             key="recover_github_tag",
         )
         a, b = st.columns(2)
-        if a.button("Load job tag", use_container_width=True, disabled=not manual_tag.strip()):
+        if a.button("Load reference", use_container_width=True, disabled=not manual_tag.strip()):
             try:
                 release = backend.find_job_by_tag(manual_tag.strip())
                 st.session_state["github_suggested_job"] = {
@@ -274,9 +306,9 @@ def _show_github_recovery_panel(settings: GitHubCloudConfig | None) -> None:
                 }
                 st.rerun()
             except Exception as exc:
-                st.exception(exc)
+                _show_user_error("Unable to complete this action", exc)
 
-        if b.button("Find recent jobs", use_container_width=True):
+        if b.button("Find recent requests", use_container_width=True):
             try:
                 releases = backend.list_recent_jobs(limit=20)
                 st.session_state["recent_github_jobs"] = [
@@ -288,14 +320,14 @@ def _show_github_recovery_panel(settings: GitHubCloudConfig | None) -> None:
                     for release in releases
                 ]
             except Exception as exc:
-                st.exception(exc)
+                _show_user_error("Unable to complete this action", exc)
 
         recent = st.session_state.get("recent_github_jobs", [])
         if recent:
             labels = [f"{item['name']} | {item['tag_name']}" for item in recent]
-            selected_label = st.selectbox("Recent private jobs", labels, key="recent_github_job_select")
+            selected_label = st.selectbox("Recent requests", labels, key="recent_github_job_select")
             selected = recent[labels.index(selected_label)]
-            if st.button("Load selected recent job", use_container_width=True):
+            if st.button("Load selected request", use_container_width=True):
                 st.session_state["github_suggested_job"] = {
                     "tag_name": selected["tag_name"],
                     "release_id": selected["release_id"],
@@ -309,12 +341,12 @@ def _show_github_recovery_panel(settings: GitHubCloudConfig | None) -> None:
 def overview_page() -> None:
     hero()
     metrics = st.columns(4)
-    metrics[0].metric("Production workflows", "4")
-    metrics[1].metric("Master scripts", "4 preserved")
-    metrics[2].metric("Processing model", "Streamlit + GitHub worker")
+    metrics[0].metric("Available services", "4")
+    metrics[1].metric("Core operations", "4")
+    metrics[2].metric("Processing", "Secure full processing")
     metrics[3].metric("Primary outputs", "XLSX / ZIP")
 
-    st.markdown("### Workflow studio")
+    st.markdown("### Choose a service")
     cards = [
         ("PROFILE MATCHING", "Suggested Stock Mapper", "Output: Suggested report ZIP"),
         ("DEMAND RULES", "Demand Filter Mapper", "Output: Salesperson report ZIP"),
@@ -337,7 +369,7 @@ def suggested_page() -> None:
     section_header(
         "Profile, demand & history intelligence",
         "Suggested Stock Mapper",
-        "Run the complete preserved recommendation engine with every operational control from the original USER INPUT section available in the web interface.",
+        "Run the complete stock recommendation process with all matching, report, scope, styling, and sorting options available in one place.",
         ["Upload inputs", "Configure matching", "Select scope", "Generate & download"],
     )
 
@@ -364,10 +396,7 @@ def suggested_page() -> None:
             sales_history = st.file_uploader(
                 "Sales history workbook(s)", type=["xlsx"], accept_multiple_files=True, key="suggest_sales"
             )
-        st.caption(
-            "Required: Stock Actual and Filters. At least one party-profile file is recommended. "
-            "Uploaded files are passed to the unchanged master engine through temporary paths."
-        )
+        st.caption("Required: Stock Actual and Filters. At least one party-profile file is recommended. Choose the files that contain your stock, filters, and party details.")
 
         discovery_identity = (
             _uploaded_file_identity(profile_perm),
@@ -378,10 +407,7 @@ def suggested_page() -> None:
             "Scan uploaded files for salesperson and party names (optional)",
             use_container_width=True,
             disabled=not any((profile_perm, profile_temp, filters)),
-            help=(
-                "Use this only when you need uploaded names in the manual selection lists. "
-                "A full 'All salespeople' GitHub job discovers names again on the worker, so scanning here is not required."
-            ),
+            help=("Use this only when you need names from the uploaded files in the manual selection lists. Full processing reads the names automatically, so this scan is optional."),
         )
         if scan_names:
             with st.spinner("Reading only salesperson and party columns..."):
@@ -506,12 +532,7 @@ def suggested_page() -> None:
                 max_value=1_048_576,
                 value=1_000_000,
                 step=10_000,
-                help=(
-                    "This setting is passed to the preserved master engine for "
-                    "intermediate batch workbooks only. The final downloaded "
-                    "MASTER_CONSOLIDATED_REPORT.xlsx is always assembled into one "
-                    "Master_Data worksheet when it fits Excel's hard row limit."
-                ),
+                help=("This limit is used only while large requests are processed in smaller groups. The final downloaded MASTER_CONSOLIDATED_REPORT.xlsx is assembled into one Master_Data worksheet when it fits Excel's row limit."),
             )
         )
 
@@ -537,7 +558,7 @@ def suggested_page() -> None:
             options=salesperson_options,
             default=default_salespeople()[:1],
             disabled=not runtime["TEST_MODE"],
-            help="Options combine the original script lists with names found in uploaded files.",
+            help="Options combine the available default lists with names found in uploaded files.",
         )
         custom_salespeople = st.text_area(
             "Additional salesperson names",
@@ -719,31 +740,31 @@ def suggested_page() -> None:
     if runtime["MATCH_STATUS_FILTER_MODE"] == "SPECIFIC" and runtime["MATCH_STATUS_SPECIFIC_PARTIES"] == ["NONE"]:
         missing.append("one or more status-filter parties")
     if runtime["ENABLE_ADVANCED_SORTING"] and not sales_history:
-        st.warning("Advanced sorting is enabled without sales-history files. The preserved master code will continue and bypass history-based limits if no history can be loaded.")
+        st.warning("Advanced sorting is enabled without sales-history files. History-based limits will be skipped when no sales history is available.")
 
-    st.markdown("#### Processing destination")
+    st.markdown("#### Processing option")
     processing_mode = st.radio(
         "Choose where the Suggested Stock Mapper runs",
         [
-            "GitHub Actions full run (recommended)",
-            "Run inside this Streamlit app (small test only)",
+            "Full processing (recommended)",
+            "Quick browser test (up to 3 salespeople)",
         ],
         horizontal=True,
-        help="GitHub Actions keeps the heavy Excel work away from Streamlit Community Cloud's smaller app server.",
+        help="Full processing is recommended for large files and all-salespeople requests.",
     )
 
-    if processing_mode.startswith("GitHub Actions"):
+    if processing_mode.startswith("Full processing"):
         settings = _github_job_settings()
         c1, c2, c3 = st.columns(3)
-        batch_size = int(c1.number_input("Salespeople per batch", min_value=1, max_value=20, value=1, step=1))
-        continue_after_failure = c2.toggle("Continue after failed batch", value=True)
+        batch_size = int(c1.number_input("Salespeople per group", min_value=1, max_value=20, value=1, step=1))
+        continue_after_failure = c2.toggle("Continue after an unsuccessful group", value=True)
         scope_mode = c3.selectbox(
-            "Batch scope",
+            "People to include",
             ["All salespeople discovered from current inputs", "Only salespeople selected above"],
         )
         requested_by = st.text_input(
             "Requested by (optional)",
-            placeholder="Name or work email for the manifest",
+            placeholder="Name or work email for the request record",
         )
 
         cloud_scope = "all" if scope_mode.startswith("All") else "selected"
@@ -755,34 +776,20 @@ def suggested_page() -> None:
             if not (cloud_scope == "all" and item == "one or more selected salespeople")
         ]
         if cloud_scope == "selected" and not cloud_salespeople:
-            cloud_missing.append("one or more selected salespeople for batching")
+            cloud_missing.append("one or more selected salespeople")
         if settings is None:
-            cloud_missing.append("GitHub settings in Streamlit secrets")
-            st.warning(
-                "The background worker is not connected yet. Add the [github] secret block described in "
-                "STREAMLIT_GITHUB_SETUP.md after pushing this project to your private repository."
-            )
+            cloud_missing.append("full processing connection")
+            st.warning("Full processing is not connected yet. Please contact the administrator to complete the application setup.")
 
         if cloud_scope == "all":
-            st.caption(
-                "The worker will read the exact salesperson names from the uploaded Parquet profiles and Filters workbook, "
-                f"then process them in groups of {batch_size}. All matching, filtering, styling and output settings above "
-                "are copied into every batch. Only TEST_MODE and TEST_SALESPEOPLE change per batch."
-            )
+            st.caption(f"The application will read salesperson names from the uploaded profile and Filters files, then process them in groups of {batch_size}. All matching, filtering, styling, and output choices above are applied to every group.")
         else:
             estimated_batches = (len(cloud_salespeople) + batch_size - 1) // batch_size if cloud_salespeople else 0
-            st.caption(
-                f"This job will process {len(cloud_salespeople)} selected salesperson(s) in approximately "
-                f"{estimated_batches} batch(es). All other configuration remains identical across batches."
-            )
-        st.info(
-            "The worker uses isolated batches for memory safety, then restores the normal final output layout: "
-            "one global MASTER_CONSOLIDATED_REPORT.xlsx when Merged Master is enabled, plus every salesperson "
-            "workbook and separated-party ZIP together in the same final ZIP when those options are enabled."
-        )
+            st.caption(f"This request will process {len(cloud_salespeople)} selected salesperson(s) in approximately {estimated_batches} group(s). All other choices remain the same for every group.")
+        st.info("Large requests are processed in smaller groups and combined into one final ZIP. When Merged Master is enabled, one global MASTER_CONSOLIDATED_REPORT.xlsx is included with any enabled salesperson workbooks and separated-party files.")
 
         if st.button(
-            "Submit full run to GitHub Actions",
+            "Start full processing",
             type="primary",
             use_container_width=True,
             disabled=bool(cloud_missing),
@@ -791,19 +798,19 @@ def suggested_page() -> None:
             try:
                 assert settings is not None
                 backend = GitHubReleaseBackend(settings)
-                with st.spinner("Checking the private repository connection..."):
+                with st.spinner("Checking the secure processing connection..."):
                     backend.check_connection(require_private=True)
                     active_jobs = backend.list_active_jobs(limit=30)
                     if active_jobs:
                         active_tag = str(active_jobs[0].get("tag_name", "another job"))
                         raise GitHubJobError(
-                            "A Matching Mapper job is already queued or running: "
-                            f"{active_tag}. Wait for it to finish or delete the stale job before submitting another."
+                            "A Matching Mapper request is already queued or running: "
+                            f"{active_tag}. Please let it finish or remove the previous request before starting another."
                         )
                 job_tag = new_job_tag()
                 with tempfile.TemporaryDirectory(prefix="matching_mapper_submit_") as tmp:
                     bundle_path = Path(tmp) / "input_bundle.zip"
-                    with st.spinner("Packaging inputs and submitting the private background job..."):
+                    with st.spinner("Preparing files and starting full processing..."):
                         build_job_bundle(
                             output_path=bundle_path,
                             job_id=job_tag,
@@ -832,12 +839,12 @@ def suggested_page() -> None:
                     "batch_size": batch_size,
                     "salespeople_count": len(cloud_salespeople) if cloud_scope == "selected" else "Discovering",
                 }
-                st.success("Full run submitted. GitHub Actions will continue even after this browser page is closed.")
+                st.success("Full processing started. It will continue even if this page is closed.")
                 st.rerun()
             except GitHubJobError as exc:
-                st.error(str(exc))
+                _show_user_error("Full processing could not be started", exc)
             except Exception as exc:
-                st.exception(exc)
+                _show_user_error("Unable to complete this action", exc)
 
         if cloud_missing:
             st.info("Complete the following before submission: " + "; ".join(dict.fromkeys(cloud_missing)))
@@ -850,19 +857,16 @@ def suggested_page() -> None:
             local_missing.append("enable salesperson selection for the local test")
         elif len(local_salespeople) > 3:
             local_missing.append("select no more than 3 salespeople for the local test")
-        st.warning(
-            "Local processing is deliberately limited to at most 3 selected salespeople. "
-            "Use GitHub Actions for an all-salespeople or full production run."
-        )
+        st.warning("The quick browser test is limited to at most 3 selected salespeople. Use full processing for all-salespeople or large requests.")
         if st.button(
-            "Generate suggested stock reports in Streamlit",
+            "Generate test reports",
             type="primary",
             use_container_width=True,
             disabled=bool(local_missing),
             key="run_suggested_locally",
         ):
             try:
-                with st.spinner("Running the preserved master matching engine. Large profiles may take several minutes..."):
+                with st.spinner("Generating the selected reports. Large profile files may take several minutes..."):
                     data, filename, logs = run_suggested_process(
                         stock_bytes=stock.getvalue(),
                         profile_perm_bytes=profile_perm.getvalue() if profile_perm else None,
@@ -875,7 +879,7 @@ def suggested_page() -> None:
                     _save_result("suggested_result", data, filename, logs)
                 st.rerun()
             except Exception as exc:
-                st.exception(exc)
+                _show_user_error("Unable to complete this action", exc)
 
         if local_missing:
             st.info(
@@ -888,14 +892,14 @@ def demand_filter_page() -> None:
     section_header(
         "Rule-based stock demand",
         "Demand Filter Mapper",
-        "Apply the original filter-demand master code to Stock Actual and the Filters workbook. Reports are generated by salesperson.",
+        "Apply your demand rules to Stock Actual and the Filters workbook. Reports are generated for each salesperson.",
         ["Upload stock", "Upload filters", "Set tolerance", "Download reports"],
     )
     left, right = st.columns(2)
     stock = left.file_uploader("Stock Actual workbook *", type=["xlsx"], key="demand_stock")
     filters = right.file_uploader("Filters workbook *", type=["xlsx"], key="demand_filters")
 
-    with st.expander("Runtime controls", expanded=True):
+    with st.expander("Report settings", expanded=True):
         c1, c2, c3 = st.columns(3)
         tolerance = c1.number_input("Tolerance level", min_value=0, max_value=3, value=1, step=1)
         flo_mapping = c2.toggle("Group VSL / SL with FNT", value=False)
@@ -916,7 +920,7 @@ def demand_filter_page() -> None:
                 _save_result("demand_result", data, filename, logs)
             st.rerun()
         except Exception as exc:
-            st.exception(exc)
+            _show_user_error("Unable to complete this action", exc)
     _show_result("demand_result", "Download demand-filter reports ZIP")
 
 
@@ -924,7 +928,7 @@ def sorting_page() -> None:
     section_header(
         "Suggested-output prioritization",
         "Sort Suggested Output",
-        "Run the preserved sorting engine with all business controls from its CONFIG section.",
+        "Prioritize suggested output using your selected match rules, limits, history, and scoring choices.",
         ["Upload suggested ZIP", "Choose match rules", "Configure scoring", "Download sorted ZIP"],
     )
     input_zip = st.file_uploader("Suggested output ZIP *", type=["zip"], key="sort_zip")
@@ -1074,7 +1078,7 @@ def sorting_page() -> None:
                 _save_result("sort_result", data, filename, logs)
             st.rerun()
         except Exception as exc:
-            st.exception(exc)
+            _show_user_error("Unable to complete this action", exc)
     if missing:
         st.info("Complete the following before processing: " + "; ".join(missing))
     _show_result("sort_result", "Download sorted suggested ZIP")
@@ -1083,7 +1087,7 @@ def separation_page() -> None:
     section_header(
         "Workbook distribution",
         "Separate Excel Sheets",
-        "Split each worksheet from every Excel workbook inside an uploaded ZIP. Each source workbook becomes its own nested ZIP of separate sheet files.",
+        "Split each worksheet from every Excel workbook inside an uploaded ZIP. Each uploaded workbook becomes its own ZIP of separate sheet files.",
         ["Upload master ZIP", "Find workbooks", "Separate sheets", "Download final ZIP"],
     )
     input_zip = st.file_uploader("ZIP containing Excel workbooks *", type=["zip"], key="separate_zip")
@@ -1094,7 +1098,7 @@ def separation_page() -> None:
                 _save_result("separate_result", data, filename, logs)
             st.rerun()
         except Exception as exc:
-            st.exception(exc)
+            _show_user_error("Unable to complete this action", exc)
     _show_result("separate_result", "Download separated workbook ZIP")
 
 

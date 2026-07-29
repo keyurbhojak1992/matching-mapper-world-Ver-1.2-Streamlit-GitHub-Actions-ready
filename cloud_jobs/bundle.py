@@ -189,7 +189,7 @@ def build_job_bundle(
     if size >= MAX_RELEASE_ASSET_BYTES:
         destination.unlink(missing_ok=True)
         raise ValueError(
-            "The packaged input bundle is too large for one GitHub release asset. "
+            "The uploaded files are too large for one full-processing request. "
             f"Bundle size: {size / (1024 ** 3):.2f} GiB."
         )
     return job
