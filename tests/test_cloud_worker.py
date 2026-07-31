@@ -48,6 +48,25 @@ def test_build_job_bundle_streams_inputs(tmp_path: Path):
     assert sorted(metadata["runtime_overrides"]["SORT_HIGH_PRIORITY_PARTY_TYPES"]) == ["GOLD", "VIP"]
 
 
+
+def test_build_job_bundle_allows_repository_default_inputs(tmp_path: Path):
+    destination = tmp_path / "input_bundle_defaults.zip"
+    job = build_job_bundle(
+        output_path=destination,
+        job_id="mmw-job-defaults",
+        runtime_overrides={},
+        scope="selected",
+        salespeople=["Mr. One"],
+        batch_size=1,
+        continue_after_failed_batch=True,
+        stock_file=("stock.xlsx", io.BytesIO(_excel_bytes(["Serial No"]))),
+        filter_file=None,
+    )
+    assert job["inputs"]["filters"] is None
+    with zipfile.ZipFile(destination) as archive:
+        assert "inputs/filters.xlsx" not in archive.namelist()
+
+
 def test_salesperson_discovery_reads_profile_and_filter_columns(tmp_path: Path):
     profile_path = tmp_path / "profile.parquet"
     pd.DataFrame(

@@ -143,7 +143,7 @@ def run_job(arguments: argparse.Namespace) -> int:
         if not isinstance(inputs, dict):
             raise ValueError("Job metadata does not contain a valid inputs object.")
         stock_path = _path_from_metadata(extracted_root, inputs.get("stock"), required=True, label="stock")
-        filter_path = _path_from_metadata(extracted_root, inputs.get("filters"), required=True, label="filters")
+        filter_path = _path_from_metadata(extracted_root, inputs.get("filters"), required=False, label="filters")
         profile_perm_path = _path_from_metadata(
             extracted_root, inputs.get("profile_perm"), required=False, label="permanent profile"
         )

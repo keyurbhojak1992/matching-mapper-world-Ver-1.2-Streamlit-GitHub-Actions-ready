@@ -21,7 +21,7 @@ def digest(path: Path) -> str:
 def test_master_sources_match_repository_checksum_manifest():
     manifest = ROOT / "SOURCE_CHECKSUMS.sha256"
     lines = [line.strip() for line in manifest.read_text(encoding="utf-8").splitlines() if line.strip()]
-    assert len(lines) == 8
+    assert len(lines) == 10
     for line in lines:
         expected, relative = line.split(maxsplit=1)
         path = ROOT / relative.strip()
@@ -34,11 +34,13 @@ def test_importable_master_modules():
         load_fresh_module(MASTER_CODE_DIR / "Suggested_Process.py", "test_suggested"),
         load_fresh_module(MASTER_CODE_DIR / "Filter_Demand_Stock_Process.py", "test_demand"),
         load_fresh_module(MASTER_CODE_DIR / "Sorting_Suggested_Output_Zip_Process.py", "test_sorting"),
+        load_fresh_module(MASTER_CODE_DIR / "BID_Drop_Checking_Process.py", "test_bid_drop"),
     ]
     try:
         assert callable(modules[0].generate_salesperson_reports_from_profile)
         assert callable(modules[1].generate_salesperson_reports)
         assert callable(modules[2].main)
+        assert callable(modules[3].run_bid_drop_check)
     finally:
         for module in modules:
             sys.modules.pop(module.__name__, None)

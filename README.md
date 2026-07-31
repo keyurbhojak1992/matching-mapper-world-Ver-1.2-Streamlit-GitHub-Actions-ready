@@ -1,6 +1,6 @@
 # Matching Mapper World — Streamlit + GitHub Actions worker
 
-A private Streamlit interface for diamond matching, demand mapping, suggested-stock generation, output prioritization, and workbook distribution.
+A private Streamlit interface for diamond matching, demand mapping, suggested-stock generation, output prioritization, BID drop diagnostics, and workbook distribution.
 
 ## Recommended deployment
 
@@ -50,17 +50,18 @@ suggested_reports_final_combined.zip
 └── FINAL_OUTPUT_README.txt
 ```
 
-The global master is assembled in low-memory streaming mode and preserves the original master output rules for column order, row fills, borders, decimal formats, and widths. Version 1.4.3 strictly creates one worksheet named `Master_Data` whenever the result fits Excel's hard worksheet row limit. Links are written as `HYPERLINK()` formulas, and the intermediate `MAX_ROWS_PER_SHEET` configuration no longer splits the final downloaded master. The four source scripts in `original_master_code/` remain unchanged.
+The global master is assembled in low-memory streaming mode and preserves the original master output rules for column order, row fills, borders, decimal formats, and widths. Version 1.5.0 strictly creates one worksheet named `Master_Data` whenever the result fits Excel's hard worksheet row limit. Links are written as `HYPERLINK()` formulas, and the intermediate `MAX_ROWS_PER_SHEET` configuration no longer splits the final downloaded master. The preserved source scripts in `original_master_code/` are invoked through adapters; the sorting source now includes hyperlink rebinding and formula translation, and the BID drop diagnostic source has been added as its own process.
 
 ## Master-code protection
 
-The four uploaded source scripts remain in `original_master_code/`. The deployment wrapper does not edit them:
+The verified process sources remain in `original_master_code/` and are invoked through thin deployment adapters:
 
 ```text
 Suggested_Process.py
 Filter_Demand_Stock_Process.py
 Separated_Excel_Files.py
 Sorting_Suggested_Output_Zip_Process.py
+BID_Drop_Checking_Process.py
 ```
 
 Adapters provide temporary paths, runtime overrides, Linux-compatible upload/download handling, logs, and batching. `SOURCE_CHECKSUMS.sha256` records the included source hashes.
@@ -68,8 +69,22 @@ Adapters provide temporary paths, runtime overrides, Linux-compatible upload/dow
 ## Other workflows
 
 - **Demand Filter Mapper** — applies the preserved demand/filter process.
-- **Sort Suggested Output** — runs the preserved sorting process with web-configurable controls.
+- **Sort Suggested Output** — runs the hyperlink-safe sorting process with web-configurable controls.
+- **BID Drop Checking Process** — creates a deep-gap diagnostic workbook from suggested results, bids, sales/actions, stock, filters, and exclusions.
 - **Separate Excel Sheets** — uses a Linux-compatible openpyxl adapter because the preserved desktop script depends on Windows Excel COM.
+
+## Repository default data files
+
+The Suggested Stock Mapper and BID Drop Checking Process use repository defaults when the matching upload is omitted:
+
+```text
+data/PARTY_PROFILE_PERM.parquet
+data/PARTY_PROFILE_TEMP.parquet
+data/filters - EBID.xlsx
+data/no_need.xlsx
+```
+
+Uploaded files always override the repository copy. The four business-data files must be committed to the private repository; the app does not generate them.
 
 ## Local development
 
@@ -91,6 +106,7 @@ For local GitHub job submission, copy `.streamlit/secrets.toml.example` to `.str
 ├── adapters/
 ├── cloud_jobs/                   # Streamlit-side bundle and GitHub API client
 ├── cloud_worker/                 # GitHub Actions runner entry points
+├── data/                         # administrator-managed default profiles/rule workbooks
 ├── .github/workflows/
 ├── original_master_code/
 ├── tests/
@@ -103,7 +119,7 @@ For local GitHub job submission, copy `.streamlit/secrets.toml.example` to `.str
 
 ## Data handling
 
-Production files are temporarily stored as assets on a private draft release and on an ephemeral GitHub Actions runner. The input asset is deleted after processing; the result remains private until the user downloads it and clicks **Delete job files**. Confirm that this storage model is permitted by your organization's data policy.
+The four administrator-managed default inputs are stored in the private repository under `data/`. Job-specific uploads are temporarily stored as assets on a private draft release and on an ephemeral GitHub Actions runner. The input asset is deleted after processing; the result remains private until the user downloads it and clicks **Delete job files**. Confirm that both repository storage and temporary release storage are permitted by your organization's data policy.
 
 ## Copyright
 

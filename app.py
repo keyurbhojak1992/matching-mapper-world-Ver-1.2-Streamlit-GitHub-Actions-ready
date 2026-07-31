@@ -4,10 +4,13 @@ import io
 import re
 import tempfile
 import zipfile
+from contextlib import ExitStack
 from pathlib import Path
 
 import streamlit as st
 
+from adapters.bid_drop_adapter import run_bid_drop_checking
+from adapters.common import repository_data_path
 from adapters.filter_demand_adapter import run_filter_demand
 from adapters.separate_adapter import run_separate_excel_files
 from adapters.sort_adapter import run_sorting_process
@@ -60,6 +63,7 @@ PAGES = [
     "Suggested Stock Mapper",
     "Demand Filter Mapper",
     "Sort Suggested Output",
+    "BID Drop Checking Process",
     "Separate Excel Sheets",
 ]
 page = st.sidebar.radio("WORKSPACE", PAGES, label_visibility="visible")
@@ -76,8 +80,38 @@ def _uploaded_file_identity(uploaded_file) -> tuple[str, str, int] | None:
     )
 
 
-def _save_result(key: str, data: bytes, filename: str, logs: str) -> None:
-    st.session_state[key] = {"data": data, "filename": filename, "logs": logs}
+def _save_result(
+    key: str,
+    data: bytes,
+    filename: str,
+    logs: str,
+    mime: str = "application/zip",
+) -> None:
+    st.session_state[key] = {
+        "data": data, "filename": filename, "logs": logs, "mime": mime
+    }
+
+
+def _repository_default_exists(key: str) -> bool:
+    return repository_data_path(key).is_file()
+
+
+def _input_or_default_stream(stack: ExitStack, uploaded_file, key: str):
+    if uploaded_file is not None:
+        return uploaded_file
+    path = repository_data_path(key)
+    return stack.enter_context(path.open("rb")) if path.is_file() else None
+
+
+def _input_identity(uploaded_file, key: str) -> tuple[str, str, int] | None:
+    uploaded = _uploaded_file_identity(uploaded_file)
+    if uploaded is not None:
+        return uploaded
+    path = repository_data_path(key)
+    if not path.is_file():
+        return None
+    stat = path.stat()
+    return ("repository-default", path.name, int(stat.st_size))
 
 
 def _friendly_message(value: object, fallback: str = "The request could not be completed.") -> str:
@@ -124,10 +158,13 @@ def _show_result(key: str, label: str) -> None:
     c1, c2, c3 = st.columns(3)
     c1.metric("Output status", "Ready")
     c2.metric("File size", f"{len(result['data']) / (1024 * 1024):,.2f} MB")
-    try:
-        with zipfile.ZipFile(io.BytesIO(result["data"])) as zf:
-            count = len([n for n in zf.namelist() if not n.endswith("/")])
-    except Exception:
+    if str(result["filename"]).lower().endswith(".zip"):
+        try:
+            with zipfile.ZipFile(io.BytesIO(result["data"])) as zf:
+                count = len([n for n in zf.namelist() if not n.endswith("/")])
+        except Exception:
+            count = 1
+    else:
         count = 1
     c3.metric("Files packaged", f"{count:,}")
     st.success("Processing completed. Your output is ready to download.")
@@ -135,7 +172,7 @@ def _show_result(key: str, label: str) -> None:
         label,
         data=result["data"],
         file_name=result["filename"],
-        mime="application/zip",
+        mime=result.get("mime", "application/zip"),
         type="primary",
         use_container_width=True,
         key=f"download_{key}",
@@ -341,8 +378,8 @@ def _show_github_recovery_panel(settings: GitHubCloudConfig | None) -> None:
 def overview_page() -> None:
     hero()
     metrics = st.columns(4)
-    metrics[0].metric("Available services", "4")
-    metrics[1].metric("Core operations", "4")
+    metrics[0].metric("Available services", "5")
+    metrics[1].metric("Core operations", "5")
     metrics[2].metric("Processing", "Secure full processing")
     metrics[3].metric("Primary outputs", "XLSX / ZIP")
 
@@ -351,6 +388,7 @@ def overview_page() -> None:
         ("PROFILE MATCHING", "Suggested Stock Mapper", "Output: Suggested report ZIP"),
         ("DEMAND RULES", "Demand Filter Mapper", "Output: Salesperson report ZIP"),
         ("PRIORITIZATION", "Sort Suggested Output", "Output: Sorted suggested ZIP"),
+        ("BID DIAGNOSTICS", "BID Drop Checking Process", "Output: Deep gap analysis XLSX"),
         ("WORKBOOK DELIVERY", "Separate Excel Sheets", "Output: Nested separated ZIP"),
     ]
     for row_start in range(0, len(cards), 2):
@@ -388,34 +426,44 @@ def suggested_page() -> None:
         left, right = st.columns(2)
         with left:
             stock = st.file_uploader("Stock Actual workbook *", type=["xlsx"], key="suggest_stock")
-            profile_perm = st.file_uploader("Permanent party profile", type=["parquet"], key="suggest_perm")
-            profile_temp = st.file_uploader("Temporary party profile", type=["parquet"], key="suggest_temp")
+            profile_perm = st.file_uploader("Permanent party profile (optional override)", type=["parquet"], key="suggest_perm")
+            profile_temp = st.file_uploader("Temporary party profile (optional override)", type=["parquet"], key="suggest_temp")
         with right:
-            filters = st.file_uploader("Filters workbook *", type=["xlsx"], key="suggest_filters")
-            no_need = st.file_uploader("No-need / exclusion workbook", type=["xlsx"], key="suggest_noneed")
+            filters = st.file_uploader("Filters workbook (optional override)", type=["xlsx"], key="suggest_filters")
+            no_need = st.file_uploader("No-need / exclusion workbook (optional override)", type=["xlsx"], key="suggest_noneed")
             sales_history = st.file_uploader(
                 "Sales history workbook(s)", type=["xlsx"], accept_multiple_files=True, key="suggest_sales"
             )
-        st.caption("Required: Stock Actual and Filters. At least one party-profile file is recommended. Choose the files that contain your stock, filters, and party details.")
+        st.caption(
+            "Stock Actual must be uploaded. Omitted profiles/rule files use: "
+            "data/PARTY_PROFILE_PERM.parquet, data/PARTY_PROFILE_TEMP.parquet, "
+            "data/filters - EBID.xlsx, and data/no_need.xlsx."
+        )
 
         discovery_identity = (
-            _uploaded_file_identity(profile_perm),
-            _uploaded_file_identity(profile_temp),
-            _uploaded_file_identity(filters),
+            _input_identity(profile_perm, "profile_perm"),
+            _input_identity(profile_temp, "profile_temp"),
+            _input_identity(filters, "filters"),
         )
         scan_names = st.button(
-            "Scan uploaded files for salesperson and party names (optional)",
+            "Scan uploaded/default files for salesperson and party names (optional)",
             use_container_width=True,
-            disabled=not any((profile_perm, profile_temp, filters)),
-            help=("Use this only when you need names from the uploaded files in the manual selection lists. Full processing reads the names automatically, so this scan is optional."),
+            disabled=not any((
+                profile_perm, profile_temp, filters,
+                _repository_default_exists("profile_perm"),
+                _repository_default_exists("profile_temp"),
+                _repository_default_exists("filters"),
+            )),
+            help=("Use this only when you need names from uploads or repository defaults in the manual selection lists. Full processing reads the names automatically, so this scan is optional."),
         )
         if scan_names:
             with st.spinner("Reading only salesperson and party columns..."):
-                found_salespeople, found_parties = discover_suggested_names_from_streams(
-                    profile_perm,
-                    profile_temp,
-                    filters,
-                )
+                with ExitStack() as stack:
+                    found_salespeople, found_parties = discover_suggested_names_from_streams(
+                        _input_or_default_stream(stack, profile_perm, "profile_perm"),
+                        _input_or_default_stream(stack, profile_temp, "profile_temp"),
+                        _input_or_default_stream(stack, filters, "filters"),
+                    )
             st.session_state["suggested_name_discovery"] = {
                 "identity": discovery_identity,
                 "salespeople": found_salespeople,
@@ -727,8 +775,17 @@ def suggested_page() -> None:
     missing: list[str] = []
     if stock is None:
         missing.append("Stock Actual")
-    if filters is None:
-        missing.append("Filters")
+    if filters is None and not _repository_default_exists("filters"):
+        missing.append("Filters upload or data/filters - EBID.xlsx")
+    if (
+        profile_perm is None
+        and profile_temp is None
+        and not _repository_default_exists("profile_perm")
+        and not _repository_default_exists("profile_temp")
+    ):
+        missing.append("party profile upload or repository profile default")
+    if runtime["ENABLE_CLEAN_FILE"] and no_need is None and not _repository_default_exists("no_need"):
+        missing.append("No-need upload or data/no_need.xlsx")
     if not runtime["GENERATE_MERGED_MASTER"] and not runtime["GENERATE_INDIVIDUAL_REPORTS"]:
         missing.append("at least one report format")
     if runtime["TEST_MODE"] and not runtime["TEST_SALESPEOPLE"]:
@@ -782,7 +839,7 @@ def suggested_page() -> None:
             st.warning("Full processing is not connected yet. Please contact the administrator to complete the application setup.")
 
         if cloud_scope == "all":
-            st.caption(f"The application will read salesperson names from the uploaded profile and Filters files, then process them in groups of {batch_size}. All matching, filtering, styling, and output choices above are applied to every group.")
+            st.caption(f"The application will read salesperson names from the uploaded overrides or repository profile and Filters files, then process them in groups of {batch_size}. All matching, filtering, styling, and output choices above are applied to every group.")
         else:
             estimated_batches = (len(cloud_salespeople) + batch_size - 1) // batch_size if cloud_salespeople else 0
             st.caption(f"This request will process {len(cloud_salespeople)} selected salesperson(s) in approximately {estimated_batches} group(s). All other choices remain the same for every group.")
@@ -820,7 +877,7 @@ def suggested_page() -> None:
                             batch_size=batch_size,
                             continue_after_failed_batch=continue_after_failure,
                             stock_file=(stock.name, stock),
-                            filter_file=(filters.name, filters),
+                            filter_file=(filters.name, filters) if filters else None,
                             profile_perm_file=(profile_perm.name, profile_perm) if profile_perm else None,
                             profile_temp_file=(profile_temp.name, profile_temp) if profile_temp else None,
                             clean_file=(no_need.name, no_need) if no_need else None,
@@ -871,7 +928,7 @@ def suggested_page() -> None:
                         stock_bytes=stock.getvalue(),
                         profile_perm_bytes=profile_perm.getvalue() if profile_perm else None,
                         profile_temp_bytes=profile_temp.getvalue() if profile_temp else None,
-                        filter_bytes=filters.getvalue(),
+                        filter_bytes=filters.getvalue() if filters else None,
                         clean_bytes=no_need.getvalue() if no_need else None,
                         sales_history_files=[(file.name, file.getvalue()) for file in (sales_history or [])],
                         runtime_overrides=runtime,
@@ -1083,6 +1140,80 @@ def sorting_page() -> None:
         st.info("Complete the following before processing: " + "; ".join(missing))
     _show_result("sort_result", "Download sorted suggested ZIP")
 
+def bid_drop_page() -> None:
+    section_header(
+        "Bid conversion diagnostics",
+        "BID Drop Checking Process",
+        "Explain why bid stones were suggested, blocked, out of stock, or missed by matching and capacity rules.",
+        ["Upload reports", "Use default rules", "Run diagnostics", "Download XLSX"],
+    )
+
+    left, right = st.columns(2)
+    with left:
+        suggested = st.file_uploader(
+            "MASTER_CONSOLIDATED_REPORT workbook *", type=["xlsx"], key="bid_drop_suggested"
+        )
+        bids = st.file_uploader("BID workbook *", type=["xlsx"], key="bid_drop_bids")
+        sales = st.file_uploader("Sales & Actions workbook *", type=["xlsx"], key="bid_drop_sales")
+    with right:
+        stock = st.file_uploader("Stock Actual workbook *", type=["xlsx"], key="bid_drop_stock")
+        filters = st.file_uploader(
+            "Filters workbook (optional override)", type=["xlsx"], key="bid_drop_filters"
+        )
+        no_need = st.file_uploader(
+            "No-need workbook (optional override)", type=["xlsx"], key="bid_drop_no_need"
+        )
+
+    st.caption(
+        "When omitted, Filters uses data/filters - EBID.xlsx and No-need uses data/no_need.xlsx."
+    )
+
+    missing = []
+    if suggested is None:
+        missing.append("MASTER_CONSOLIDATED_REPORT")
+    if bids is None:
+        missing.append("BID workbook")
+    if sales is None:
+        missing.append("Sales & Actions workbook")
+    if stock is None:
+        missing.append("Stock Actual workbook")
+    if filters is None and not _repository_default_exists("filters"):
+        missing.append("Filters upload or data/filters - EBID.xlsx")
+    if no_need is None and not _repository_default_exists("no_need"):
+        missing.append("No-need upload or data/no_need.xlsx")
+
+    if st.button(
+        "Run BID drop checking",
+        type="primary",
+        use_container_width=True,
+        disabled=bool(missing),
+    ):
+        try:
+            with st.spinner("Checking bid conversion gaps and building the diagnostic workbook..."):
+                data, filename, logs = run_bid_drop_checking(
+                    suggested_bytes=suggested.getvalue(),
+                    bids_bytes=bids.getvalue(),
+                    sales_bytes=sales.getvalue(),
+                    stock_bytes=stock.getvalue(),
+                    filter_bytes=filters.getvalue() if filters else None,
+                    no_need_bytes=no_need.getvalue() if no_need else None,
+                )
+                _save_result(
+                    "bid_drop_result",
+                    data,
+                    filename,
+                    logs,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+            st.rerun()
+        except Exception as exc:
+            _show_user_error("Unable to complete this action", exc)
+
+    if missing:
+        st.info("Complete the following before processing: " + "; ".join(missing))
+    _show_result("bid_drop_result", "Download BID drop analysis XLSX")
+
+
 def separation_page() -> None:
     section_header(
         "Workbook distribution",
@@ -1110,6 +1241,8 @@ elif page == "Demand Filter Mapper":
     demand_filter_page()
 elif page == "Sort Suggested Output":
     sorting_page()
+elif page == "BID Drop Checking Process":
+    bid_drop_page()
 elif page == "Separate Excel Sheets":
     separation_page()
 

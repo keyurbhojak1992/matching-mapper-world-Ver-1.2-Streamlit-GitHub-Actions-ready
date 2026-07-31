@@ -23,6 +23,7 @@ from .common import (
     apply_runtime_overrides,
     captured_output,
     load_fresh_module,
+    resolve_repository_input,
     temp_workspace,
     write_bytes,
 )
@@ -210,38 +211,58 @@ def _execute_master_in_workspace(
         gc.collect()
 
 
+def _materialize_suggested_input(
+    *,
+    work: Path,
+    uploaded_bytes: bytes | None,
+    default_key: str,
+    destination_name: str,
+    required: bool = False,
+) -> Path:
+    destination = work / destination_name
+    if uploaded_bytes is not None:
+        return write_bytes(destination, uploaded_bytes)
+    source = resolve_repository_input(None, default_key, required=required)
+    if source is not None:
+        shutil.copy2(source, destination)
+    return destination
+
+
 def run_suggested_process(
     *,
     stock_bytes: bytes,
     profile_perm_bytes: bytes | None,
     profile_temp_bytes: bytes | None,
-    filter_bytes: bytes,
+    filter_bytes: bytes | None,
     clean_bytes: bytes | None,
     sales_history_files: Iterable[tuple[str, bytes]] = (),
     runtime_overrides: dict[str, object] | None = None,
 ) -> tuple[bytes, str, str]:
-    """Execute the untouched Suggested Process master module using temporary files."""
+    """Execute Suggested Process, using repository defaults for omitted files."""
     with temp_workspace("matching_mapper_suggested_") as work:
         stock_path = write_bytes(work / "stock_uploaded.xlsx", stock_bytes)
-        filter_path = write_bytes(work / "filters.xlsx", filter_bytes)
-
-        perm_path = work / "PARTY_PROFILE_PERM.parquet"
-        temp_path = work / "PARTY_PROFILE_TEMP.parquet"
-        if profile_perm_bytes:
-            write_bytes(perm_path, profile_perm_bytes)
-        if profile_temp_bytes:
-            write_bytes(temp_path, profile_temp_bytes)
-
-        clean_path = work / "no_need.xlsx"
-        if clean_bytes:
-            write_bytes(clean_path, clean_bytes)
+        filter_path = _materialize_suggested_input(
+            work=work, uploaded_bytes=filter_bytes, default_key="filters",
+            destination_name="filters.xlsx", required=True,
+        )
+        perm_path = _materialize_suggested_input(
+            work=work, uploaded_bytes=profile_perm_bytes, default_key="profile_perm",
+            destination_name="PARTY_PROFILE_PERM.parquet",
+        )
+        temp_path = _materialize_suggested_input(
+            work=work, uploaded_bytes=profile_temp_bytes, default_key="profile_temp",
+            destination_name="PARTY_PROFILE_TEMP.parquet",
+        )
+        clean_path = _materialize_suggested_input(
+            work=work, uploaded_bytes=clean_bytes, default_key="no_need",
+            destination_name="no_need.xlsx",
+        )
 
         sales_dir = work / "Sales_And_Actions_Folder"
         sales_dir.mkdir(parents=True, exist_ok=True)
         for index, (name, data) in enumerate(sales_history_files, start=1):
             suffix = Path(name).suffix.lower() or ".xlsx"
-            safe_name = f"sales_history_{index}{suffix}"
-            write_bytes(sales_dir / safe_name, data)
+            write_bytes(sales_dir / f"sales_history_{index}{suffix}", data)
 
         output_path, logs = _execute_master_in_workspace(
             work=work,
@@ -261,34 +282,32 @@ def run_suggested_process_from_paths(
     stock_path: Path,
     profile_perm_path: Path | None,
     profile_temp_path: Path | None,
-    filter_path: Path,
+    filter_path: Path | None,
     clean_path: Path | None,
     sales_history_paths: Iterable[Path] = (),
     runtime_overrides: dict[str, object] | None = None,
     output_path: Path | None = None,
 ) -> tuple[Path, str]:
-    """
-    Run one Suggested batch from disk paths.
-
-    The path-oriented entry point avoids keeping duplicate copies of large
-    uploads in Python memory on a GitHub-hosted runner.
-    """
+    """Run one Suggested batch, resolving omitted inputs from ``data``."""
     stock_path = Path(stock_path)
-    filter_path = Path(filter_path)
     if not stock_path.is_file():
         raise FileNotFoundError(f"Stock workbook not found: {stock_path}")
-    if not filter_path.is_file():
-        raise FileNotFoundError(f"Filters workbook not found: {filter_path}")
+
+    resolved_filter = resolve_repository_input(filter_path, "filters", required=True)
+    resolved_perm = resolve_repository_input(profile_perm_path, "profile_perm")
+    resolved_temp = resolve_repository_input(profile_temp_path, "profile_temp")
+    resolved_clean = resolve_repository_input(clean_path, "no_need")
+    assert resolved_filter is not None
 
     with temp_workspace("matching_mapper_suggested_batch_") as work:
         local_stock = work / "stock_uploaded.xlsx"
         local_filter = work / "filters.xlsx"
         shutil.copy2(stock_path, local_stock)
-        shutil.copy2(filter_path, local_filter)
+        shutil.copy2(resolved_filter, local_filter)
 
-        local_perm = _copy_optional(profile_perm_path, work / "PARTY_PROFILE_PERM.parquet")
-        local_temp = _copy_optional(profile_temp_path, work / "PARTY_PROFILE_TEMP.parquet")
-        local_clean = _copy_optional(clean_path, work / "no_need.xlsx")
+        local_perm = _copy_optional(resolved_perm, work / "PARTY_PROFILE_PERM.parquet")
+        local_temp = _copy_optional(resolved_temp, work / "PARTY_PROFILE_TEMP.parquet")
+        local_clean = _copy_optional(resolved_clean, work / "no_need.xlsx")
 
         sales_dir = work / "Sales_And_Actions_Folder"
         sales_dir.mkdir(parents=True, exist_ok=True)
@@ -310,14 +329,13 @@ def run_suggested_process_from_paths(
             runtime_overrides=runtime_overrides,
         )
 
-        if output_path is None:
-            destination = Path.cwd() / f".suggested_batch_{datetime.now().strftime('%Y%m%d%H%M%S%f')}.zip"
-        else:
-            destination = Path(output_path)
+        destination = (
+            Path.cwd() / f".suggested_batch_{datetime.now().strftime('%Y%m%d%H%M%S%f')}.zip"
+            if output_path is None else Path(output_path)
+        )
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(generated_path, destination)
         return destination, logs
-
 
 def _clean_values(values: Iterable[object]) -> list[str]:
     result: list[str] = []
@@ -442,7 +460,7 @@ def run_suggested_batched_from_paths(
     stock_path: Path,
     profile_perm_path: Path | None,
     profile_temp_path: Path | None,
-    filter_path: Path,
+    filter_path: Path | None,
     clean_path: Path | None,
     sales_history_paths: Iterable[Path],
     runtime_overrides: dict[str, object],
@@ -477,6 +495,12 @@ def run_suggested_batched_from_paths(
         raise ValueError("Batch scope must be 'all' or 'selected'.")
     if not 1 <= int(batch_size) <= 20:
         raise ValueError("Batch size must be between 1 and 20.")
+
+    profile_perm_path = resolve_repository_input(profile_perm_path, "profile_perm")
+    profile_temp_path = resolve_repository_input(profile_temp_path, "profile_temp")
+    filter_path = resolve_repository_input(filter_path, "filters", required=True)
+    clean_path = resolve_repository_input(clean_path, "no_need")
+    assert filter_path is not None
 
     if normalized_scope == "all":
         clean_salespeople = discover_salespeople_from_paths(

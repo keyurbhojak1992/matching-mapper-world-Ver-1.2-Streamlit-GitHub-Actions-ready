@@ -16,6 +16,44 @@ from typing import BinaryIO, Iterable
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 MASTER_CODE_DIR = ROOT_DIR / "original_master_code"
+DATA_DIR = ROOT_DIR / "data"
+
+DEFAULT_DATA_FILES = {
+    "profile_perm": "PARTY_PROFILE_PERM.parquet",
+    "profile_temp": "PARTY_PROFILE_TEMP.parquet",
+    "filters": "filters - EBID.xlsx",
+    "no_need": "no_need.xlsx",
+}
+
+
+def repository_data_path(key: str) -> Path:
+    """Return the exact repository data path configured for an optional upload."""
+    try:
+        filename = DEFAULT_DATA_FILES[key]
+    except KeyError as exc:
+        raise KeyError(f"Unknown repository data key: {key}") from exc
+    return DATA_DIR / filename
+
+
+def resolve_repository_input(
+    supplied_path: Path | None,
+    key: str,
+    *,
+    required: bool = False,
+) -> Path | None:
+    """Prefer an uploaded path, otherwise use the exact file under ``data``."""
+    if supplied_path is not None:
+        candidate = Path(supplied_path)
+        if candidate.is_file():
+            return candidate
+    fallback = repository_data_path(key)
+    if fallback.is_file():
+        return fallback
+    if required:
+        raise FileNotFoundError(
+            f"No uploaded file was provided and the repository default is missing: data/{fallback.name}"
+        )
+    return None
 
 
 def load_fresh_module(path: Path, prefix: str) -> ModuleType:

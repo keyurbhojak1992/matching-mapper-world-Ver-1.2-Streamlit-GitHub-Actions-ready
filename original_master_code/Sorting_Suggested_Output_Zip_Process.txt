@@ -8,16 +8,17 @@ from copy import copy
 
 import pandas as pd
 from openpyxl import load_workbook
+from openpyxl.formula.translate import Translator
 
 
 # =========================================================
 # CONFIG
 # =========================================================
 
-INPUT_ZIP_OR_FOLDER = "/content/drive/MyDrive/Diamond_Project/Algo 2.0/Suggest_BID265_Stock_2026-07-15.zip"
+INPUT_ZIP_OR_FOLDER = "/content/drive/MyDrive/Diamond_Project/Algo 2.0/Suggest_BID267_Stock_2026-07-29.zip"
 SALES_FILE = "/content/drive/MyDrive/Diamond_Project/Algo 2.0/Sales_And_Actions_Folder/Sales and bid.xlsx"
 
-OUTPUT_FOLDER = r"/content/drive/MyDrive/Diamond_Project/Algo 2.0/Sales_And_Actions_Folder/sorted_output_fast_keep_order"
+OUTPUT_FOLDER = r"/content/drive/MyDrive/Diamond_Project/Algo 2.0/Sales_And_Actions_Folder/sorted_output_fast_keep_order_New"
 OUTPUT_ZIP_NAME = r"sorted_output_fast_keep_order.zip"
 
 # ---------------------------------------------------------
@@ -329,8 +330,58 @@ def get_header_map(ws):
         if norm(ws.cell(1, c).value)
     }
 
+def copy_cell_value(src_cell, dst_cell):
+    """
+    Copy a cell value. When a row contains a formula, translate relative
+    references from the source coordinate to the destination coordinate.
+    This also supports any future =HYPERLINK(...) formulas.
+    """
+    value = src_cell.value
+
+    if isinstance(value, str) and value.startswith("="):
+        try:
+            value = Translator(
+                value,
+                origin=src_cell.coordinate
+            ).translate_formula(dst_cell.coordinate)
+        except Exception:
+            # Preserve the original formula if it cannot be translated.
+            pass
+
+    dst_cell.value = value
+
+
+def copy_cell_hyperlink(src_cell, dst_cell):
+    """
+    Copy ANY standard Excel cell hyperlink, regardless of its column,
+    label, URL type, or whether it is an external or internal workbook link.
+
+    openpyxl keeps the source coordinate inside Hyperlink.ref. Therefore,
+    every copied hyperlink must be rebound to the destination coordinate.
+    """
+    if not src_cell.hyperlink:
+        dst_cell._hyperlink = None
+        return
+
+    new_link = copy(src_cell.hyperlink)
+    new_link.ref = dst_cell.coordinate
+    dst_cell._hyperlink = new_link
+
+    # Fail immediately if a hyperlink is still registered against an old row.
+    if dst_cell.hyperlink.ref != dst_cell.coordinate:
+        raise RuntimeError(
+            f"Hyperlink rebinding failed: "
+            f"{src_cell.parent.title}!{src_cell.coordinate} -> "
+            f"{dst_cell.coordinate}"
+        )
+
+
 def clone_cell(src_cell, dst_cell):
-    dst_cell.value = src_cell.value
+    # This function is called for EVERY column in the row, so all hyperlinks
+    # are handled: DETAIL, PHYGITAL, IMAGE, VIDEO, CERTIFICATE, and any other
+    # current or future hyperlink columns.
+    copy_cell_value(src_cell, dst_cell)
+
     if src_cell.has_style:
         dst_cell._style = copy(src_cell._style)
     dst_cell.number_format = src_cell.number_format
@@ -340,10 +391,7 @@ def clone_cell(src_cell, dst_cell):
     dst_cell.alignment = copy(src_cell.alignment)
     dst_cell.protection = copy(src_cell.protection)
 
-    if src_cell.hyperlink:
-        dst_cell._hyperlink = copy(src_cell.hyperlink)
-    else:
-        dst_cell._hyperlink = None
+    copy_cell_hyperlink(src_cell, dst_cell)
 
     if src_cell.comment:
         dst_cell.comment = copy(src_cell.comment)

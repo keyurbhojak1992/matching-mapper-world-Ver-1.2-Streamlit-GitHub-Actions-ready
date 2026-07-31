@@ -4,7 +4,7 @@
 
 The Streamlit app remains the private upload/configuration interface. The heavy Suggested Stock Mapper run is moved to a standard private-repository GitHub Actions Linux runner.
 
-The app does **not** commit Excel or Parquet files to Git. For every submitted job it creates a temporary **private draft release** in the same private repository, uploads `input_bundle.zip`, and dispatches `.github/workflows/process-suggested-cloud.yml`.
+The app stores four administrator-managed default inputs in the private repository under `data/`: the permanent and temporary Parquet profiles, `filters - EBID.xlsx`, and `no_need.xlsx`. User-uploaded Stock Actual, overrides, and job-specific files are not committed; each submitted job uses a temporary **private draft release**, uploads `input_bundle.zip`, and dispatches `.github/workflows/process-suggested-cloud.yml`.
 
 The worker:
 
@@ -16,7 +16,7 @@ The worker:
 6. Publishes the final ZIP and status files back to the same private draft release.
 7. Deletes the uploaded input asset when the workflow finishes.
 
-The four files in `original_master_code/` are not edited.
+The verified process sources in `original_master_code/` are called through adapters. The sorting source includes the approved hyperlink-safe update, and the BID drop source is included as a separate diagnostic process.
 
 ---
 
@@ -155,8 +155,8 @@ Invite only trusted work email addresses. The app contains a server-side credent
 Do not begin with all salespeople.
 
 1. Open **Suggested Stock Mapper**.
-2. Upload Stock Actual, Filters, and the current profile files.
-3. Click **Scan uploaded files for salesperson and party names** only when the required test name is not already in the selection list. This scan is optional for an **All salespeople** cloud run because the worker performs its own discovery.
+2. Upload Stock Actual. Upload Filters or profile files only when overriding the repository defaults.
+3. Click **Scan uploaded/default files for salesperson and party names** only when the required test name is not already in the selection list. This scan is optional for an **All salespeople** cloud run because the worker performs its own discovery.
 4. Configure the matching and output controls exactly as needed.
 5. In **Salesperson / party scope**, enable salesperson selection and choose one known salesperson.
 6. Under **Processing destination**, select:

@@ -88,7 +88,7 @@ def build_job_bundle(
     batch_size: int,
     continue_after_failed_batch: bool,
     stock_file: tuple[str, BinaryIO],
-    filter_file: tuple[str, BinaryIO],
+    filter_file: tuple[str, BinaryIO] | None = None,
     profile_perm_file: tuple[str, BinaryIO] | None = None,
     profile_temp_file: tuple[str, BinaryIO] | None = None,
     clean_file: tuple[str, BinaryIO] | None = None,
@@ -112,16 +112,18 @@ def build_job_bundle(
             "path": "inputs/stock_actual.xlsx",
             "original_name": _clean_original_name(stock_file[0], "stock_actual.xlsx"),
         },
-        "filters": {
-            "path": "inputs/filters.xlsx",
-            "original_name": _clean_original_name(filter_file[0], "filters.xlsx"),
-        },
+        "filters": None,
         "profile_perm": None,
         "profile_temp": None,
         "clean": None,
         "sales_history": [],
     }
 
+    if filter_file:
+        inputs["filters"] = {
+            "path": "inputs/filters.xlsx",
+            "original_name": _clean_original_name(filter_file[0], "filters.xlsx"),
+        }
     if profile_perm_file:
         inputs["profile_perm"] = {
             "path": "inputs/PARTY_PROFILE_PERM.parquet",
@@ -175,7 +177,8 @@ def build_job_bundle(
     ) as zf:
         zf.writestr("job.json", json.dumps(job, indent=2, ensure_ascii=False))
         _write_stream(zf, str(inputs["stock"]["path"]), stock_file[1])  # type: ignore[index]
-        _write_stream(zf, str(inputs["filters"]["path"]), filter_file[1])  # type: ignore[index]
+        if filter_file and isinstance(inputs["filters"], dict):
+            _write_stream(zf, str(inputs["filters"]["path"]), filter_file[1])
         if profile_perm_file and isinstance(inputs["profile_perm"], dict):
             _write_stream(zf, str(inputs["profile_perm"]["path"]), profile_perm_file[1])
         if profile_temp_file and isinstance(inputs["profile_temp"], dict):
