@@ -126,3 +126,46 @@ Batching does not change the requested report formats. After successful batch pr
 - Batch logs and runtime snapshots are retained only under `_batch_diagnostics/`.
 
 The assembler aligns batch master columns by header name and recreates the original master styling, decimal formats, and widths with low-memory OOXML streaming. The merged master is written to a single worksheet named `Master_Data` when the total rows fit in one Excel sheet. Report links are written as `HYPERLINK()` formulas so the output does not consume Excel native hyperlink objects.
+
+## Auto Pricing
+
+The source calculation logic is preserved. The Streamlit workspace exposes all source execution inputs:
+
+- Stock file (required)
+- 180-day Sales file (required)
+- 120-day Sales file (required)
+- View action file
+- Hold action file
+- Offer action file
+- Wishlist action file
+- Cart action file
+- Media action file
+
+The six action keys are retained even if an optional action workbook is omitted, so the source-defined count columns still exist with zero values. Only the two original hard-coded Windows output paths are redirected to temporary application files.
+
+## Dealmaker v8.2.2
+
+The application invokes the supplied `Dealmaker_Production_Runner_v6.py` directly. The UI exposes the runner's input controls:
+
+- Sales / BID workbook
+- Actions workbook
+- Current Stock workbook
+- `Dealmaker_Full_Control_v6.xlsx` optional override
+- Allocation chunk size
+- Optional Sales / Actions / Stock sheet names
+- Optional Sales / Actions / Stock header rows
+
+If no control override is uploaded, the exact control workbook bundled with the supplied v8.2.2 package is used. An uploaded override is written only to the current temporary run; it never changes the bundled base.
+
+## Layout Stock Matcher
+
+The application invokes the supplied `build_outputs()` function directly and exposes its `Config` values with source defaults unchanged:
+
+- `tolerance = 1`
+- `min_layout_pct = 0.10`
+- `min_absolute_stones = 5`
+- `min_action_weight = 45`
+- `include_match_columns = True`
+- `create_empty_salesperson_files = True`
+
+Required inputs are Layout Stock, Sales, and Actions workbooks.

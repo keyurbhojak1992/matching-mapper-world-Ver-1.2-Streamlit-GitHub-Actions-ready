@@ -1,0 +1,27 @@
+DEALMAKER v8.2.2 — PAIR COMPLETION STABLE
+=========================================
+
+Recommended use
+---------------
+Open Dealmaker_Colab_Production_v8_2_2.ipynb in Google Colab and run every cell in order.
+Upload one ZIP containing the Sales/BID, Actions, and current Stock workbooks.
+The validated control workbook is included and embedded; no separate control upload is required.
+
+Pair rule
+---------
+- A pair is one allocation unit.
+- If one eligible member is selected, its eligible partner is added to the same party basket.
+- If either member fails a hard exclusion, both members are excluded.
+- A pair cannot be split between parties.
+- Pair additions are identified in output audit fields and shown together in salesperson workbooks.
+
+Stability fixes
+---------------
+- Candidate batches are written once with one union-column schema. Optional pair audit columns can no longer create variable-width CSV rows.
+- Stage 3 reports the exact malformed candidate batch name if an external or interrupted write damages a batch.
+- Zero-accepted-basket runs create valid empty outputs and continue through the release audit.
+- Production writes a full run log and a focused failure diagnostic.
+
+Release rule
+------------
+Technical generation does not override live-stock confirmation, source freshness, pair review, or other commercial release controls.

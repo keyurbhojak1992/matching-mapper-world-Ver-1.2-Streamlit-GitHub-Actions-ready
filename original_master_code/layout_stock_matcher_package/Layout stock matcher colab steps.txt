@@ -1,0 +1,7 @@
+!python "/content/drive/MyDrive/Layout/layout_party_suggestions.py" \
+  --layout "Layout stock Final.xlsx" \
+  --sales "Sales and bid.xlsx" \
+  --skip-empty-salespersons \
+  --actions "Actions Data.xlsx" \
+  --tolerance 1 \
+  --output-zip "Salesperson_Layout_Suggestions.zip"

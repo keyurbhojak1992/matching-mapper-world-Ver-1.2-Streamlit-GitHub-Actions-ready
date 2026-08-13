@@ -6,6 +6,9 @@ def test_app_contains_all_workspaces():
     for title in [
         "Suggested Stock Mapper",
         "USA Suggested Stock Mapper",
+        "Auto Pricing",
+        "Dealmaker",
+        "Layout Stock Matcher",
         "Demand Filter Mapper",
         "Sort Suggested Output",
         "Suggested List Splitter",

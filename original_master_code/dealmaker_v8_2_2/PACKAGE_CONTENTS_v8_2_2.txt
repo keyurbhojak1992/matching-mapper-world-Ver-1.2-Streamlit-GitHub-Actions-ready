@@ -1,0 +1,29 @@
+DEALMAKER v8.2.2 — ESSENTIAL PACKAGE CONTENTS
+=============================================
+
+Notebook
+- Dealmaker_Colab_Production_v8_2_2.ipynb
+
+Control and production modules
+- Dealmaker_Full_Control_v6.xlsx
+- Dealmaker_Full_Pipeline_v6.py
+- Dealmaker_Production_Preflight_v6.py
+- Dealmaker_Production_Runner_v6.py
+- Dealmaker_Release_Gate_Audit_v6.py
+- Dealmaker_Stage1_Prepare_v6.py
+- Dealmaker_Stage1B_Profiles_Stock_v6.py
+- Dealmaker_Stage2_Allocate_v6.py
+- Dealmaker_Stage3_Finalize_v6.py
+- Dealmaker_Stage4_DealBooks_v6.py
+- Dealmaker_Step1_Interval_Engine_v10.py
+- dealmaker_io_v2.py
+- dealmaker_quality_v6.py
+
+Launch and reference
+- run_preflight_v6.sh / run_preflight_v6.bat
+- run_production_v6.sh / run_production_v6.bat
+- requirements.txt
+- START_HERE_v8_2_2.txt
+- RELEASE_NOTES_v8_2_2.md
+- VALIDATION_v8_2_2.txt
+- SHA256SUMS.txt

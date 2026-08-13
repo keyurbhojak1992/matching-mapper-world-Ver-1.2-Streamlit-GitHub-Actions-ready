@@ -9,9 +9,12 @@ from pathlib import Path
 
 import streamlit as st
 
+from adapters.auto_pricing_adapter import ACTION_NAMES as AUTO_PRICING_ACTION_NAMES, run_auto_pricing
 from adapters.bid_drop_adapter import run_bid_drop_checking
 from adapters.common import repository_data_path
+from adapters.dealmaker_adapter import bundled_dealmaker_control_bytes, run_dealmaker
 from adapters.filter_demand_adapter import run_filter_demand
+from adapters.layout_stock_matcher_adapter import run_layout_stock_matcher
 from adapters.separate_adapter import run_separate_excel_files
 from adapters.sort_adapter import run_sorting_process
 from adapters.suggested_list_splitter_adapter import run_suggested_list_splitter
@@ -64,6 +67,9 @@ PAGES = [
     "Overview",
     "Suggested Stock Mapper",
     "USA Suggested Stock Mapper",
+    "Auto Pricing",
+    "Dealmaker",
+    "Layout Stock Matcher",
     "Demand Filter Mapper",
     "Sort Suggested Output",
     "Suggested List Splitter",
@@ -382,8 +388,8 @@ def _show_github_recovery_panel(settings: GitHubCloudConfig | None) -> None:
 def overview_page() -> None:
     hero()
     metrics = st.columns(4)
-    metrics[0].metric("Available services", "7")
-    metrics[1].metric("Core operations", "7")
+    metrics[0].metric("Available services", "10")
+    metrics[1].metric("Core operations", "10")
     metrics[2].metric("Processing", "Secure full processing")
     metrics[3].metric("Primary outputs", "XLSX / ZIP")
 
@@ -391,6 +397,9 @@ def overview_page() -> None:
     cards = [
         ("PROFILE MATCHING", "Suggested Stock Mapper", "Output: Suggested report ZIP"),
         ("USA SALES HISTORY", "USA Suggested Stock Mapper", "Output: Salesperson / party suggested ZIP"),
+        ("PRICING INTELLIGENCE", "Auto Pricing", "Output: Pricing revision + cross-verification ZIP"),
+        ("DEAL ALLOCATION", "Dealmaker", "Output: Production review ZIP"),
+        ("LAYOUT MATCHING", "Layout Stock Matcher", "Output: Salesperson layout suggestions ZIP"),
         ("DEMAND RULES", "Demand Filter Mapper", "Output: Salesperson report ZIP"),
         ("PRIORITIZATION", "Sort Suggested Output", "Output: Sorted suggested ZIP"),
         ("LIST SPLITTING", "Suggested List Splitter", "Output: Under 10 / 10+ ZIPs"),
@@ -951,6 +960,289 @@ def suggested_page() -> None:
             )
         _show_result("suggested_result", "Download suggested reports ZIP")
 
+
+def auto_pricing_page() -> None:
+    section_header(
+        "Sales, actions & price intelligence",
+        "Auto Pricing",
+        "Upgrade the current stock workbook with historical buyer coverage, weighted 120-day sold rates, action counts, Diff, and pricing Remark using the preserved Auto Pricing logic.",
+        ["Upload stock + sales", "Add action files", "Run preserved calculations", "Download both workbooks"],
+    )
+
+    st.caption(
+        "The original calculation code is preserved. The app only redirects its desktop file paths into temporary processing files. "
+        "The final ZIP contains the same two business outputs: Auto pricing revision.xlsx and Cross_Verify_Sales_Actions.xlsx."
+    )
+
+    left, middle, right = st.columns(3)
+    with left:
+        stock = st.file_uploader("Stock file *", type=["xlsx"], key="auto_pricing_stock")
+    with middle:
+        sales_180 = st.file_uploader("180-day Sales file *", type=["xlsx"], key="auto_pricing_sales_180")
+    with right:
+        sales_120 = st.file_uploader("120-day Sales file *", type=["xlsx"], key="auto_pricing_sales_120")
+
+    st.markdown("#### Action files")
+    st.caption(
+        "The supplied source defines View, Hold, Offer, Wishlist, Cart, and Media. Each upload is optional; "
+        "when one is omitted its matching/all-count columns remain zero, consistent with the source's missing-file handling."
+    )
+    action_uploads = {}
+    columns = st.columns(3)
+    for index, action_name in enumerate(AUTO_PRICING_ACTION_NAMES):
+        with columns[index % 3]:
+            action_uploads[action_name] = st.file_uploader(
+                f"{action_name} actions (optional)",
+                type=["xlsx"],
+                key=f"auto_pricing_action_{action_name.lower()}",
+            )
+
+    missing = []
+    if stock is None:
+        missing.append("Stock file")
+    if sales_180 is None:
+        missing.append("180-day Sales file")
+    if sales_120 is None:
+        missing.append("120-day Sales file")
+
+    if st.button(
+        "Run Auto Pricing",
+        type="primary",
+        use_container_width=True,
+        disabled=bool(missing),
+        key="run_auto_pricing",
+    ):
+        try:
+            with st.spinner("Calculating sales coverage, actions, weighted rates, Diff, and Remark..."):
+                data, filename, logs = run_auto_pricing(
+                    stock_bytes=stock.getvalue(),
+                    sales_180_bytes=sales_180.getvalue(),
+                    sales_120_bytes=sales_120.getvalue(),
+                    action_files={
+                        name: uploaded.getvalue() if uploaded is not None else None
+                        for name, uploaded in action_uploads.items()
+                    },
+                )
+                _save_result("auto_pricing_result", data, filename, logs)
+            st.rerun()
+        except Exception as exc:
+            _show_user_error("Unable to complete Auto Pricing", exc)
+
+    if missing:
+        st.info("Complete the following before processing: " + "; ".join(missing))
+    _show_result("auto_pricing_result", "Download Auto Pricing output ZIP")
+
+
+def dealmaker_page() -> None:
+    section_header(
+        "Production deal allocation",
+        "Dealmaker",
+        "Run the supplied Dealmaker v8.2.2 production package end-to-end: preflight, preparation, stock profiling, sequential allocation, finalization, deal books, and release-gate audit.",
+        ["Upload Sales / Actions / Stock", "Use bundled or updated control", "Run production stages", "Download review ZIP"],
+    )
+
+    st.caption(
+        "Default behavior uses the bundled Dealmaker_Full_Control_v6.xlsx from the supplied v8.2.2 package. "
+        "If the base/control workbook changes, upload the updated Dealmaker_Full_Control_v6.xlsx here for that run. "
+        "The bundled file is never overwritten."
+    )
+
+    left, middle, right = st.columns(3)
+    with left:
+        sales = st.file_uploader("Full Sales / BID workbook *", type=["xlsx"], key="dealmaker_sales")
+    with middle:
+        actions = st.file_uploader("Full Actions workbook *", type=["xlsx"], key="dealmaker_actions")
+    with right:
+        stock = st.file_uploader("Actual current-stock workbook *", type=["xlsx"], key="dealmaker_stock")
+
+    base_col, upload_col = st.columns(2)
+    with base_col:
+        st.download_button(
+            "Download bundled Dealmaker_Full_Control_v6.xlsx",
+            data=bundled_dealmaker_control_bytes(),
+            file_name="Dealmaker_Full_Control_v6.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+            key="download_dealmaker_bundled_control",
+            on_click="ignore",
+        )
+    with upload_col:
+        control = st.file_uploader(
+            "Dealmaker_Full_Control_v6.xlsx (optional updated base/control override)",
+            type=["xlsx"],
+            key="dealmaker_control",
+            help="Leave blank to use the verified control workbook bundled with Dealmaker v8.2.2.",
+        )
+    if control is None:
+        st.info("Control source for this run: bundled Dealmaker_Full_Control_v6.xlsx")
+    else:
+        st.success("Control source for this run: uploaded control override (bundled base remains unchanged)")
+
+    with st.expander("Advanced input detection and production settings", expanded=False):
+        st.caption("Leave sheet names blank and header rows on Auto unless preflight cannot detect the source correctly.")
+        chunk_size = st.number_input(
+            "Parties per allocation chunk",
+            min_value=1,
+            max_value=100,
+            value=10,
+            step=1,
+            key="dealmaker_chunk_size",
+        )
+        sheet_cols = st.columns(3)
+        sales_sheet = sheet_cols[0].text_input("Sales sheet name (optional)", key="dealmaker_sales_sheet")
+        actions_sheet = sheet_cols[1].text_input("Actions sheet name (optional)", key="dealmaker_actions_sheet")
+        stock_sheet = sheet_cols[2].text_input("Stock sheet name (optional)", key="dealmaker_stock_sheet")
+        header_cols = st.columns(3)
+        sales_header_auto = header_cols[0].checkbox("Auto-detect Sales header row", value=True, key="dealmaker_sales_header_auto")
+        actions_header_auto = header_cols[1].checkbox("Auto-detect Actions header row", value=True, key="dealmaker_actions_header_auto")
+        stock_header_auto = header_cols[2].checkbox("Auto-detect Stock header row", value=True, key="dealmaker_stock_header_auto")
+        sales_header = None if sales_header_auto else int(header_cols[0].number_input("Sales header row", min_value=1, value=1, step=1, key="dealmaker_sales_header_row"))
+        actions_header = None if actions_header_auto else int(header_cols[1].number_input("Actions header row", min_value=1, value=1, step=1, key="dealmaker_actions_header_row"))
+        stock_header = None if stock_header_auto else int(header_cols[2].number_input("Stock header row", min_value=1, value=1, step=1, key="dealmaker_stock_header_row"))
+
+    missing = []
+    if sales is None:
+        missing.append("Sales / BID workbook")
+    if actions is None:
+        missing.append("Actions workbook")
+    if stock is None:
+        missing.append("current-stock workbook")
+
+    if st.button(
+        "Run Dealmaker production package",
+        type="primary",
+        use_container_width=True,
+        disabled=bool(missing),
+        key="run_dealmaker",
+    ):
+        try:
+            with st.spinner("Running Dealmaker preflight, allocation, finalization, deal books, and release audit..."):
+                data, filename, logs = run_dealmaker(
+                    sales_bytes=sales.getvalue(),
+                    actions_bytes=actions.getvalue(),
+                    stock_bytes=stock.getvalue(),
+                    control_bytes=control.getvalue() if control else None,
+                    chunk_size=int(chunk_size),
+                    sales_sheet=sales_sheet,
+                    actions_sheet=actions_sheet,
+                    stock_sheet=stock_sheet,
+                    sales_header_row=sales_header,
+                    actions_header_row=actions_header,
+                    stock_header_row=stock_header,
+                )
+                _save_result("dealmaker_result", data, filename, logs)
+            st.rerun()
+        except Exception as exc:
+            _show_user_error("Unable to complete the Dealmaker production run", exc)
+
+    if missing:
+        st.info("Complete the following before processing: " + "; ".join(missing))
+    _show_result("dealmaker_result", "Download Dealmaker production review ZIP")
+
+
+def layout_stock_matcher_page() -> None:
+    section_header(
+        "Layout-driven stock suggestions",
+        "Layout Stock Matcher",
+        "Create salesperson-wise layout suggestion workbooks from Layout Stock, Sales, and Actions using the preserved exact/tolerance matching engine.",
+        ["Upload Layout / Sales / Actions", "Keep or adjust source controls", "Generate salesperson workbooks", "Download ZIP"],
+    )
+
+    st.caption(
+        "Default source behavior: Shape + revised Carat group + Lab are exact keys; Color, Clarity, and Fluorescence use tolerance 1. "
+        "Output retains the source's Exact / Nearby / Multi Nearby classification and workbook formatting."
+    )
+
+    left, middle, right = st.columns(3)
+    with left:
+        layout = st.file_uploader("Layout Stock workbook *", type=["xlsx"], key="layout_matcher_layout")
+    with middle:
+        sales = st.file_uploader("Sales workbook *", type=["xlsx"], key="layout_matcher_sales")
+    with right:
+        actions = st.file_uploader("Actions workbook *", type=["xlsx"], key="layout_matcher_actions")
+
+    with st.expander("Layout matching controls", expanded=False):
+        c1, c2 = st.columns(2)
+        tolerance = c1.selectbox(
+            "Color / Clarity / Fluorescence tolerance",
+            options=[0, 1],
+            index=1,
+            format_func=lambda value: "1 - allow one rank" if value == 1 else "0 - exact only",
+            key="layout_matcher_tolerance",
+        )
+        min_layout_pct = c2.number_input(
+            "Minimum layout percentage",
+            min_value=0.0,
+            max_value=1.0,
+            value=0.10,
+            step=0.01,
+            format="%.2f",
+            key="layout_matcher_min_layout_pct",
+        )
+        c3, c4 = st.columns(2)
+        min_absolute_stones = c3.number_input(
+            "Minimum absolute stones",
+            min_value=1,
+            value=5,
+            step=1,
+            key="layout_matcher_min_absolute_stones",
+        )
+        min_action_weight = c4.number_input(
+            "Minimum action weight",
+            min_value=0,
+            value=45,
+            step=5,
+            key="layout_matcher_min_action_weight",
+        )
+        include_match_columns = st.checkbox(
+            "Include match audit columns",
+            value=True,
+            key="layout_matcher_include_match_columns",
+        )
+        create_empty_salesperson_files = st.checkbox(
+            "Create empty salesperson files when no suggestions qualify",
+            value=True,
+            key="layout_matcher_create_empty",
+        )
+
+    missing = []
+    if layout is None:
+        missing.append("Layout Stock workbook")
+    if sales is None:
+        missing.append("Sales workbook")
+    if actions is None:
+        missing.append("Actions workbook")
+
+    if st.button(
+        "Run Layout Stock Matcher",
+        type="primary",
+        use_container_width=True,
+        disabled=bool(missing),
+        key="run_layout_stock_matcher",
+    ):
+        try:
+            with st.spinner("Building party suggestions and salesperson layout workbooks..."):
+                data, filename, logs = run_layout_stock_matcher(
+                    layout_bytes=layout.getvalue(),
+                    sales_bytes=sales.getvalue(),
+                    actions_bytes=actions.getvalue(),
+                    tolerance=int(tolerance),
+                    min_layout_pct=float(min_layout_pct),
+                    min_absolute_stones=int(min_absolute_stones),
+                    min_action_weight=int(min_action_weight),
+                    include_match_columns=bool(include_match_columns),
+                    create_empty_salesperson_files=bool(create_empty_salesperson_files),
+                )
+                _save_result("layout_stock_matcher_result", data, filename, logs)
+            st.rerun()
+        except Exception as exc:
+            _show_user_error("Unable to complete Layout Stock Matcher", exc)
+
+    if missing:
+        st.info("Complete the following before processing: " + "; ".join(missing))
+    _show_result("layout_stock_matcher_result", "Download Layout Stock Matcher ZIP")
+
+
 def demand_filter_page() -> None:
     section_header(
         "Rule-based stock demand",
@@ -1346,6 +1638,12 @@ elif page == "Suggested Stock Mapper":
     suggested_page()
 elif page == "USA Suggested Stock Mapper":
     usa_suggested_stock_mapper_page()
+elif page == "Auto Pricing":
+    auto_pricing_page()
+elif page == "Dealmaker":
+    dealmaker_page()
+elif page == "Layout Stock Matcher":
+    layout_stock_matcher_page()
 elif page == "Demand Filter Mapper":
     demand_filter_page()
 elif page == "Sort Suggested Output":

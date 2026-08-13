@@ -1,0 +1,34 @@
+DEALMAKER v8.2.2 VALIDATION
+===========================
+
+Validation date: 2026-08-03
+Pipeline version: 8.2.2
+
+PASS — All production Python modules compile
+PASS — Mixed-schema candidate frames serialize under one union header
+PASS — Candidate serialization preserves commas, quotes, and embedded newlines
+PASS — Serialized candidate row count reconciles to the batch counter
+PASS — Stage 2 to Stage 3 candidate archive regression
+PASS — Accepted-basket end-to-end production run
+PASS — Independent release audit completes
+PASS — Selected member adds its eligible pair partner
+PASS — Hard exclusion on either member removes the complete pair
+PASS — Missing partner fails closed
+PASS — Bidirectional pair recognition from one-sided SGPComment
+PASS — Global pair reservation prevents split allocation
+PASS — Empty output handling retained
+PASS — Self-contained Colab payload equals packaged production files
+PASS — Package SHA-256 and ZIP CRC verification
+
+Actual business inputs can still produce intentional preflight or release blocks when configured business controls are not satisfied. Those blocks are expected safeguards, not software crashes.
+
+CARAT-RANGE PATCH VALIDATION — 2026-08-08
+==========================================
+PASS — All packaged Python modules compile after the carat-range change
+PASS — Targeted boundary mapping covers every revised standard carat bucket
+PASS — 5.00 maps to 5.00-7.99
+PASS — 15.00 maps to 15+
+PASS — Existing Carat_grp is recomputed from numeric Carat in history/actions and stock
+PASS — Colab embedded production payload exactly matches packaged production files
+PASS — No HK/China country-specific carat branch exists in this Dealmaker package
+

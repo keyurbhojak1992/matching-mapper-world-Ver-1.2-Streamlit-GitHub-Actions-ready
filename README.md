@@ -18,9 +18,12 @@ Private downloadable combined ZIP
 
 Start with [`START_HERE.md`](START_HERE.md). The full one-time setup, security model, testing sequence, and troubleshooting guide are in [`STREAMLIT_GITHUB_SETUP.md`](STREAMLIT_GITHUB_SETUP.md).
 
-### New in 1.7.0
+### New in 1.8.0
 
-- **USA Suggested Stock Mapper**: upload Stock Actual plus USA sales-history workbooks to generate salesperson/party suggestion ZIPs using exact and nearby historical Super Tag matching.
+- **Auto Pricing**: runs the preserved Auto Pricing calculations from Stock, 180-day Sales, 120-day Sales, and View/Hold/Offer/Wishlist/Cart/Media action files. The two original XLSX outputs are packaged together for download.
+- **Dealmaker**: runs the complete supplied v8.2.2 production package, including preflight, staged allocation, deal books, and release-gate audit. The verified bundled `Dealmaker_Full_Control_v6.xlsx` is used by default; an updated control workbook can be uploaded per run without changing the bundled base.
+- **Layout Stock Matcher**: runs the preserved layout matching engine from Layout Stock, Sales, and Actions with the source defaults and optional source-supported controls.
+- **USA Suggested Stock Mapper** remains available from v1.7.0.
 
 ## Heavy Suggested Stock Mapper runs
 
@@ -72,6 +75,9 @@ Adapters provide temporary paths, runtime overrides, Linux-compatible upload/dow
 
 ## Other workflows
 
+- **Auto Pricing** — preserves the supplied pricing and cross-verification calculations; only desktop input/output paths are adapted to temporary app files.
+- **Dealmaker** — invokes the supplied v8.2.2 production runner directly. Use the bundled control base or upload an updated `Dealmaker_Full_Control_v6.xlsx` for the current run.
+- **Layout Stock Matcher** — invokes the preserved layout matching source with Layout Stock, Sales, and Actions uploads.
 - **Demand Filter Mapper** — applies the preserved demand/filter process.
 - **Sort Suggested Output** — runs the hyperlink-safe sorting process with web-configurable controls.
 - **Suggested List Splitter** — groups each salesperson's suggested workbooks into `Under 10 Stones` and `10+ Stones` ZIP folders by counting populated Serial No rows.
