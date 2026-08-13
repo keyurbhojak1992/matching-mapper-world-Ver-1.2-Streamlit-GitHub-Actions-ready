@@ -14,6 +14,7 @@ from adapters.common import repository_data_path
 from adapters.filter_demand_adapter import run_filter_demand
 from adapters.separate_adapter import run_separate_excel_files
 from adapters.sort_adapter import run_sorting_process
+from adapters.suggested_list_splitter_adapter import run_suggested_list_splitter
 from adapters.suggested_adapter import run_suggested_process
 from cloud_jobs.bundle import (
     FAILURE_ASSET_NAME,
@@ -63,6 +64,7 @@ PAGES = [
     "Suggested Stock Mapper",
     "Demand Filter Mapper",
     "Sort Suggested Output",
+    "Suggested List Splitter",
     "BID Drop Checking Process",
     "Separate Excel Sheets",
 ]
@@ -378,8 +380,8 @@ def _show_github_recovery_panel(settings: GitHubCloudConfig | None) -> None:
 def overview_page() -> None:
     hero()
     metrics = st.columns(4)
-    metrics[0].metric("Available services", "5")
-    metrics[1].metric("Core operations", "5")
+    metrics[0].metric("Available services", "6")
+    metrics[1].metric("Core operations", "6")
     metrics[2].metric("Processing", "Secure full processing")
     metrics[3].metric("Primary outputs", "XLSX / ZIP")
 
@@ -388,6 +390,7 @@ def overview_page() -> None:
         ("PROFILE MATCHING", "Suggested Stock Mapper", "Output: Suggested report ZIP"),
         ("DEMAND RULES", "Demand Filter Mapper", "Output: Salesperson report ZIP"),
         ("PRIORITIZATION", "Sort Suggested Output", "Output: Sorted suggested ZIP"),
+        ("LIST SPLITTING", "Suggested List Splitter", "Output: Under 10 / 10+ ZIPs"),
         ("BID DIAGNOSTICS", "BID Drop Checking Process", "Output: Deep gap analysis XLSX"),
         ("WORKBOOK DELIVERY", "Separate Excel Sheets", "Output: Nested separated ZIP"),
     ]
@@ -1140,6 +1143,38 @@ def sorting_page() -> None:
         st.info("Complete the following before processing: " + "; ".join(missing))
     _show_result("sort_result", "Download sorted suggested ZIP")
 
+def suggested_list_splitter_page() -> None:
+    section_header(
+        "Stone-count distribution",
+        "Suggested List Splitter",
+        "Split suggested Excel files for each salesperson into Under 10 Stones and 10+ Stones packages.",
+        ["Upload suggested ZIP", "Count Serial No rows", "Split by stone count", "Download final ZIP"],
+    )
+    st.caption("Boundary rule: 0-9 stones -> Under 10 Stones; exactly 10 and above -> 10+ Stones.")
+    input_zip = st.file_uploader(
+        "Suggested list ZIP *", type=["zip"], key="suggested_list_split_zip"
+    )
+    if st.button(
+        "Split suggested lists by stone count",
+        type="primary",
+        use_container_width=True,
+        disabled=input_zip is None,
+    ):
+        try:
+            with st.spinner("Counting stones and packaging salesperson lists..."):
+                data, filename, logs = run_suggested_list_splitter(
+                    input_zip_bytes=input_zip.getvalue()
+                )
+                _save_result("suggested_list_split_result", data, filename, logs)
+            st.rerun()
+        except Exception as exc:
+            _show_user_error("Unable to complete this action", exc)
+    _show_result(
+        "suggested_list_split_result",
+        "Download split suggested-list ZIP",
+    )
+
+
 def bid_drop_page() -> None:
     section_header(
         "Bid conversion diagnostics",
@@ -1241,6 +1276,8 @@ elif page == "Demand Filter Mapper":
     demand_filter_page()
 elif page == "Sort Suggested Output":
     sorting_page()
+elif page == "Suggested List Splitter":
+    suggested_list_splitter_page()
 elif page == "BID Drop Checking Process":
     bid_drop_page()
 elif page == "Separate Excel Sheets":

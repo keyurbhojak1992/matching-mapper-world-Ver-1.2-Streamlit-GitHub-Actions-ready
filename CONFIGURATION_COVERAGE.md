@@ -90,6 +90,15 @@ The app exposes the complete business-control block:
 
 Input/output paths remain adapter-managed because web uploads use temporary folders rather than Windows or Google Drive paths.
 
+## Suggested List Splitter
+
+This workspace adapts the supplied Colab stone-count splitter for Streamlit uploads. It searches the first 30 rows of each worksheet for accepted Serial No headers, counts populated serial rows, and uses the maximum valid sheet count for each workbook.
+
+- `0-9` stones -> `Under 10 Stones`
+- `10+` stones -> `10+ Stones`
+- Workbooks whose count cannot be determined -> `Needs Review` so input files are not silently lost.
+- The final download contains one nested ZIP per salesperson, matching the supplied Colab packaging pattern.
+
 ## Separate Excel Sheets
 
 The original source contains path and Windows Excel COM settings rather than matching controls. Those paths are intentionally replaced by the Streamlit upload/download adapter. The source itself remains preserved unchanged.

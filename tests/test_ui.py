@@ -7,6 +7,7 @@ def test_app_contains_all_workspaces():
         "Suggested Stock Mapper",
         "Demand Filter Mapper",
         "Sort Suggested Output",
+        "Suggested List Splitter",
         "BID Drop Checking Process",
         "Separate Excel Sheets",
     ]:

@@ -70,6 +70,7 @@ Adapters provide temporary paths, runtime overrides, Linux-compatible upload/dow
 
 - **Demand Filter Mapper** — applies the preserved demand/filter process.
 - **Sort Suggested Output** — runs the hyperlink-safe sorting process with web-configurable controls.
+- **Suggested List Splitter** — groups each salesperson's suggested workbooks into `Under 10 Stones` and `10+ Stones` ZIP folders by counting populated Serial No rows.
 - **BID Drop Checking Process** — creates a deep-gap diagnostic workbook from suggested results, bids, sales/actions, stock, filters, and exclusions.
 - **Separate Excel Sheets** — uses a Linux-compatible openpyxl adapter because the preserved desktop script depends on Windows Excel COM.
 

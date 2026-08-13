@@ -10,6 +10,7 @@ from openpyxl.styles import PatternFill
 from adapters.bid_drop_adapter import run_bid_drop_checking
 from adapters.filter_demand_adapter import run_filter_demand
 from adapters.sort_adapter import run_sorting_process
+from adapters.suggested_list_splitter_adapter import run_suggested_list_splitter
 from adapters.suggested_adapter import run_suggested_process
 
 
@@ -255,3 +256,108 @@ def test_bid_drop_checking_adapter_smoke(tmp_path, monkeypatch):
     result = pd.read_excel(io.BytesIO(output))
     assert result.loc[0, 'Diagnostic Status'] == '✅ SUCCESS'
     assert 'suggested and converted' in result.loc[0, 'Explanation']
+
+
+def _stone_count_workbook(count: int, *, header_row: int = 1) -> bytes:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = 'List'
+    for _ in range(header_row - 1):
+        ws.append(['title'])
+    ws.append(['Serial No', 'Value'])
+    for index in range(1, count + 1):
+        ws.append([f'S{index:03d}', index])
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    return buffer.getvalue()
+
+
+def test_suggested_list_splitter_under_10_and_10_plus_boundary():
+    source_zip = io.BytesIO()
+    with zipfile.ZipFile(source_zip, 'w', zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr('Wrapper/Mr Alpha/nine.xlsx', _stone_count_workbook(9))
+        zf.writestr('Wrapper/Mr Alpha/ten.xlsx', _stone_count_workbook(10))
+        zf.writestr('Wrapper/Mr Beta/eleven.xlsx', _stone_count_workbook(11, header_row=4))
+
+    output, filename, logs = run_suggested_list_splitter(input_zip_bytes=source_zip.getvalue())
+    assert filename.startswith('Suggested_List_Split_')
+    assert 'Under 10 Stones: 1' in logs
+    assert '10+ Stones: 2' in logs
+
+    with zipfile.ZipFile(io.BytesIO(output)) as outer:
+        assert sorted(outer.namelist()) == ['Mr Alpha.zip', 'Mr Beta.zip']
+        alpha_bytes = outer.read('Mr Alpha.zip')
+        beta_bytes = outer.read('Mr Beta.zip')
+
+    with zipfile.ZipFile(io.BytesIO(alpha_bytes)) as alpha:
+        names = set(alpha.namelist())
+        assert 'Under 10 Stones/nine.xlsx' in names
+        assert '10+ Stones/ten.xlsx' in names
+
+    with zipfile.ZipFile(io.BytesIO(beta_bytes)) as beta:
+        assert '10+ Stones/eleven.xlsx' in set(beta.namelist())
+
+
+def test_suggested_list_splitter_preserves_single_salesperson_name():
+    source_zip = io.BytesIO()
+    with zipfile.ZipFile(source_zip, 'w', zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr('Mr Solo/nine.xlsx', _stone_count_workbook(9))
+
+    output, _, _ = run_suggested_list_splitter(input_zip_bytes=source_zip.getvalue())
+    with zipfile.ZipFile(io.BytesIO(output)) as outer:
+        assert outer.namelist() == ['Mr Solo.zip']
+
+
+def test_sorting_selected_match_types_and_strict_navigation_threshold():
+    wb = Workbook()
+    nav = wb.active
+    nav.title = 'Navigation'
+    nav.append(['Go To Sheet', 'Count'])
+    nav.append(['AT THRESHOLD', 200])
+    nav.append(['ABOVE THRESHOLD', 201])
+
+    headers = ['Sr.No', 'Serial No', 'Shp', 'Carat', 'Color', 'Qua', 'Cut', 'Pol', 'Sym', 'Flo', 'Lab', 'Disc%', 'SGPComment']
+    at_ws = wb.create_sheet('AT THRESHOLD')
+    at_ws.append(headers)
+    at_ws.append([1, 'UNCHANGED', 'RBC', 1.0, 'D', 'VS1', 'EX', 'EX', 'EX', 'NON', 'GIA', -35, ''])
+
+    ws = wb.create_sheet('ABOVE THRESHOLD')
+    ws.append(headers)
+    for idx, serial in enumerate(['EXACT', 'NEAR', 'FILTER', 'MAYBE'], start=1):
+        ws.append([idx, serial, 'RBC', 1.0, 'D', 'VS1', 'EX', 'EX', 'EX', 'NON', 'GIA', -35, ''])
+
+    fills = {
+        2: PatternFill(start_color='CCFFCC', end_color='CCFFCC', fill_type='solid'),
+        3: PatternFill(start_color='FFE699', end_color='FFE699', fill_type='solid'),
+        4: PatternFill(start_color='FFF2CC', end_color='FFF2CC', fill_type='solid'),
+    }
+    for row_num, fill in fills.items():
+        for cell in ws[row_num][:5]:
+            cell.fill = fill
+
+    workbook_buffer = io.BytesIO()
+    wb.save(workbook_buffer)
+    input_zip = io.BytesIO()
+    with zipfile.ZipFile(input_zip, 'w', zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr('Sorter.xlsx', workbook_buffer.getvalue())
+
+    output, _, _ = run_sorting_process(
+        input_zip_bytes=input_zip.getvalue(),
+        sales_file_bytes=None,
+        runtime_overrides={
+            'ONLY_MATCHED_TYPE': True,
+            'ALLOWED_MATCH_TYPES': {'Exact', 'Near by', 'Filter'},
+            'COUNT_THRESHOLD': 200,
+        },
+    )
+
+    with zipfile.ZipFile(io.BytesIO(output)) as zf:
+        result_wb = load_workbook(io.BytesIO(zf.read('Sorter.xlsx')))
+
+    assert result_wb['AT THRESHOLD']['B2'].value == 'UNCHANGED'
+    filtered = result_wb['ABOVE THRESHOLD']
+    assert [filtered.cell(r, 2).value for r in range(2, 5)] == ['EXACT', 'NEAR', 'FILTER']
+    assert filtered.max_row == 4
+    nav_result = result_wb['Navigation']
+    assert nav_result['B2'].value == 200
+    assert nav_result['B3'].value == 3
