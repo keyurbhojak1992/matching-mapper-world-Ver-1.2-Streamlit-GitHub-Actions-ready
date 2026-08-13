@@ -18,6 +18,10 @@ Private downloadable combined ZIP
 
 Start with [`START_HERE.md`](START_HERE.md). The full one-time setup, security model, testing sequence, and troubleshooting guide are in [`STREAMLIT_GITHUB_SETUP.md`](STREAMLIT_GITHUB_SETUP.md).
 
+### New in 1.7.0
+
+- **USA Suggested Stock Mapper**: upload Stock Actual plus USA sales-history workbooks to generate salesperson/party suggestion ZIPs using exact and nearby historical Super Tag matching.
+
 ## Heavy Suggested Stock Mapper runs
 
 The Suggested page supports two destinations:

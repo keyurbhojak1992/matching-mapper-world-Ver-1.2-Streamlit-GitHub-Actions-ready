@@ -5,6 +5,7 @@ def test_app_contains_all_workspaces():
     text = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
     for title in [
         "Suggested Stock Mapper",
+        "USA Suggested Stock Mapper",
         "Demand Filter Mapper",
         "Sort Suggested Output",
         "Suggested List Splitter",

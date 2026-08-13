@@ -15,6 +15,7 @@ from adapters.filter_demand_adapter import run_filter_demand
 from adapters.separate_adapter import run_separate_excel_files
 from adapters.sort_adapter import run_sorting_process
 from adapters.suggested_list_splitter_adapter import run_suggested_list_splitter
+from adapters.usa_suggested_stock_mapper_adapter import run_usa_suggested_stock_mapper
 from adapters.suggested_adapter import run_suggested_process
 from cloud_jobs.bundle import (
     FAILURE_ASSET_NAME,
@@ -62,6 +63,7 @@ st.sidebar.caption(f"Application version {APP_VERSION}")
 PAGES = [
     "Overview",
     "Suggested Stock Mapper",
+    "USA Suggested Stock Mapper",
     "Demand Filter Mapper",
     "Sort Suggested Output",
     "Suggested List Splitter",
@@ -380,14 +382,15 @@ def _show_github_recovery_panel(settings: GitHubCloudConfig | None) -> None:
 def overview_page() -> None:
     hero()
     metrics = st.columns(4)
-    metrics[0].metric("Available services", "6")
-    metrics[1].metric("Core operations", "6")
+    metrics[0].metric("Available services", "7")
+    metrics[1].metric("Core operations", "7")
     metrics[2].metric("Processing", "Secure full processing")
     metrics[3].metric("Primary outputs", "XLSX / ZIP")
 
     st.markdown("### Choose a service")
     cards = [
         ("PROFILE MATCHING", "Suggested Stock Mapper", "Output: Suggested report ZIP"),
+        ("USA SALES HISTORY", "USA Suggested Stock Mapper", "Output: Salesperson / party suggested ZIP"),
         ("DEMAND RULES", "Demand Filter Mapper", "Output: Salesperson report ZIP"),
         ("PRIORITIZATION", "Sort Suggested Output", "Output: Sorted suggested ZIP"),
         ("LIST SPLITTING", "Suggested List Splitter", "Output: Under 10 / 10+ ZIPs"),
@@ -1143,6 +1146,75 @@ def sorting_page() -> None:
         st.info("Complete the following before processing: " + "; ".join(missing))
     _show_result("sort_result", "Download sorted suggested ZIP")
 
+def usa_suggested_stock_mapper_page() -> None:
+    section_header(
+        "USA sales-history recommendation",
+        "USA Suggested Stock Mapper",
+        "Generate suggested stock files for the USA team from Stock Actual and one or more USA sales-history workbooks.",
+        ["Upload USA inputs", "Build top Super Tags", "Match exact + nearby stock", "Download salesperson ZIP"],
+    )
+
+    st.caption(
+        "This USA workflow uses each party's historical Shape / Carat Group / Color / Clarity / "
+        "Fluorescence / Lab combinations. Exact matches are included first, followed by adjacent "
+        "Color, Clarity, and Fluorescence suggestions without repeating Serial No values."
+    )
+
+    left, right = st.columns(2)
+    with left:
+        stock = st.file_uploader(
+            "USA Stock Actual workbook *", type=["xlsx"], key="usa_suggest_stock"
+        )
+    with right:
+        sales_history = st.file_uploader(
+            "USA sales history workbook(s) *",
+            type=["xlsx"],
+            accept_multiple_files=True,
+            key="usa_suggest_sales",
+        )
+
+    top_n = st.number_input(
+        "Top historical Super Tags per party",
+        min_value=1,
+        max_value=5000,
+        value=251,
+        step=25,
+        key="usa_suggest_top_n",
+        help="The supplied USA mapper uses 251 by default.",
+    )
+
+    missing: list[str] = []
+    if stock is None:
+        missing.append("USA Stock Actual workbook")
+    if not sales_history:
+        missing.append("at least one USA sales history workbook")
+
+    if st.button(
+        "Generate USA suggested stock",
+        type="primary",
+        use_container_width=True,
+        disabled=bool(missing),
+        key="run_usa_suggested_stock",
+    ):
+        try:
+            with st.spinner("Matching USA sales history to stock and building party reports..."):
+                data, filename, logs = run_usa_suggested_stock_mapper(
+                    stock_bytes=stock.getvalue(),
+                    sales_history_files=[
+                        (file.name, file.getvalue()) for file in (sales_history or [])
+                    ],
+                    top_n_supertags=int(top_n),
+                )
+                _save_result("usa_suggested_result", data, filename, logs)
+            st.rerun()
+        except Exception as exc:
+            _show_user_error("Unable to generate USA suggested stock", exc)
+
+    if missing:
+        st.info("Complete the following before processing: " + "; ".join(missing))
+    _show_result("usa_suggested_result", "Download USA suggested stock ZIP")
+
+
 def suggested_list_splitter_page() -> None:
     section_header(
         "Stone-count distribution",
@@ -1272,6 +1344,8 @@ if page == "Overview":
     overview_page()
 elif page == "Suggested Stock Mapper":
     suggested_page()
+elif page == "USA Suggested Stock Mapper":
+    usa_suggested_stock_mapper_page()
 elif page == "Demand Filter Mapper":
     demand_filter_page()
 elif page == "Sort Suggested Output":
