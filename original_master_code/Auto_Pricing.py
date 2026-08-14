@@ -1,5 +1,10 @@
+import os
+import datetime as dt
+
 import pandas as pd
 import numpy as np
+from openpyxl import Workbook, load_workbook
+from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 from openpyxl.styles import Alignment, Border, Font, Side
 from openpyxl.utils import get_column_letter
 
@@ -74,6 +79,165 @@ def apply_sheet1_base_format(ws):
             cell.font = body_font
             cell.alignment = body_alignment
             cell.border = table_border
+
+
+SAFE_BUILD_ID = "AUTO_PRICING_SAFE_2026_08_14_V4"
+EXPECTED_OUTPUT_SHEETS = [
+    'Sheet1',
+    'Sale_segment',
+    'Avg_Rate',
+    'Hold',
+    'Wishlist',
+    'View',
+    'Offer',
+    'Cart'
+]
+
+
+def _excel_safe_value(value):
+    """Convert pandas/numpy values to values that openpyxl can save safely."""
+    if value is None:
+        return None
+
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+
+    if isinstance(value, pd.Timestamp):
+        value = value.to_pydatetime()
+    elif isinstance(value, pd.Timedelta):
+        value = str(value)
+    elif isinstance(value, np.generic):
+        value = value.item()
+
+    if isinstance(value, dt.datetime) and value.tzinfo is not None:
+        value = value.replace(tzinfo=None)
+
+    if isinstance(value, str):
+        value = ILLEGAL_CHARACTERS_RE.sub('', value)
+        if len(value) > 32767:
+            value = value[:32767]
+
+    return value
+
+
+def _write_dataframe_to_sheet(ws, df):
+    """Write one dataframe directly to an openpyxl worksheet."""
+    if df is None:
+        return
+
+    if len(df) + 1 > 1048576:
+        raise ValueError(
+            f"Sheet '{ws.title}' has {len(df)} data rows, which exceeds Excel's row limit."
+        )
+
+    if len(df.columns) > 16384:
+        raise ValueError(
+            f"Sheet '{ws.title}' has {len(df.columns)} columns, which exceeds Excel's column limit."
+        )
+
+    ws.append([_excel_safe_value(col) for col in df.columns])
+
+    for row in df.itertuples(index=False, name=None):
+        ws.append([_excel_safe_value(value) for value in row])
+
+
+def _atomic_save_workbook(wb, output_file):
+    """Save to a temporary xlsx first, then replace the destination safely."""
+    output_file = os.path.abspath(output_file)
+    output_dir = os.path.dirname(output_file)
+    os.makedirs(output_dir, exist_ok=True)
+
+    root, ext = os.path.splitext(output_file)
+    if ext.lower() != '.xlsx':
+        raise ValueError(f"Output file must end in .xlsx: {output_file}")
+
+    temp_file = root + '.__auto_pricing_tmp__.xlsx'
+
+    try:
+        wb.save(temp_file)
+    finally:
+        wb.close()
+
+    try:
+        os.replace(temp_file, output_file)
+    except PermissionError as exc:
+        try:
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
+        except OSError:
+            pass
+        raise PermissionError(
+            f"Cannot replace '{output_file}'. Close the Excel file if it is open, then run Auto Pricing again."
+        ) from exc
+
+    return output_file
+
+
+def _verify_output_workbook(output_file):
+    """Verify that every required output sheet exists after saving."""
+    check_wb = load_workbook(output_file, read_only=True, data_only=False)
+    try:
+        missing = [name for name in EXPECTED_OUTPUT_SHEETS if name not in check_wb.sheetnames]
+        if missing:
+            raise KeyError(
+                f"Auto Pricing workbook is missing required sheet(s): {missing}. "
+                f"Available sheets: {check_wb.sheetnames}"
+            )
+    finally:
+        check_wb.close()
+
+
+def export_auto_pricing_workbook(
+    output_file,
+    df_upgraded,
+    df_180_output,
+    df_120_output,
+    action_output_sheets
+):
+    """
+    Create the requested Auto Pricing workbook directly with openpyxl.
+
+    The output is written directly through openpyxl. This avoids writer lifecycle,
+    indentation, and worksheet-availability problems.
+    """
+    wb = Workbook()
+
+    # The default worksheet exists immediately, so Sheet1 is guaranteed.
+    ws_main = wb.active
+    ws_main.title = 'Sheet1'
+    _write_dataframe_to_sheet(ws_main, df_upgraded)
+    apply_sheet1_base_format(ws_main)
+
+    # Exact source mapping requested by the user.
+    ws_sale = wb.create_sheet('Sale_segment')
+    _write_dataframe_to_sheet(ws_sale, df_180_output)
+
+    ws_avg = wb.create_sheet('Avg_Rate')
+    _write_dataframe_to_sheet(ws_avg, df_120_output)
+
+    # Keep the expected output order. If one source action could not be read,
+    # create an empty tab instead of failing the entire workbook export.
+    for sheet_name in ['Hold', 'Wishlist', 'View', 'Offer', 'Cart']:
+        ws = wb.create_sheet(sheet_name)
+        source_df = action_output_sheets.get(sheet_name)
+        if source_df is not None:
+            _write_dataframe_to_sheet(ws, source_df)
+
+    saved_file = _atomic_save_workbook(wb, output_file)
+    _verify_output_workbook(saved_file)
+    return saved_file
+
+
+def export_single_dataframe_workbook(output_file, df, sheet_name='Sheet1'):
+    """Safely export a single dataframe directly through openpyxl."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = sheet_name
+    _write_dataframe_to_sheet(ws, df)
+    return _atomic_save_workbook(wb, output_file)
 
 
 def format_weight(val):
@@ -153,7 +317,9 @@ def process_stock_upgrade(
     stock_file,
     sales_180_file,
     sales_120_file,
-    action_files_dict
+    action_files_dict,
+    output_file=None,
+    cross_verify_file=None
 ):
 
     # 1. Load Data
@@ -619,55 +785,37 @@ def process_stock_upgrade(
     ]
 
     # 9. Export Files
-    # Auto Pricing output is now ONE workbook matching the requested structure:
+    # Safe direct-openpyxl output. No pandas writer object is used.
+    # Sheet order:
     # Sheet1, Sale_segment, Avg_Rate, Hold, Wishlist, View, Offer, Cart.
-    # Media can still be used in the existing calculation logic, but it is not
-    # added as an output tab because it is not part of the expected workbook.
-    output_file = r"C:\Users\bhoja\OneDrive - SJW SHIVAM JEWELS PRIVATE LIMITED\Pricing Regular Related Demo 02-05-2026\Input 07-08-2026\Auto pricing revision.xlsx"
-    cross_verify_file = r"C:\Users\bhoja\OneDrive - SJW SHIVAM JEWELS PRIVATE LIMITED\Pricing Regular Related Demo 02-05-2026\Input 07-08-2026\Cross_Verify_Sales_Actions.xlsx"
+    if output_file is None:
+        output_file = r"C:\Users\bhoja\OneDrive - SJW SHIVAM JEWELS PRIVATE LIMITED\Pricing Regular Related Demo 02-05-2026\Input 07-08-2026\Auto pricing revision.xlsx"
 
-    with pd.ExcelWriter(output_file, engine='openpyxl') as writer:
-        # Main processed output. The 23 requested columns are already first,
-        # and every other existing output column is kept after them.
-        df_upgraded.to_excel(writer, sheet_name='Sheet1', index=False)
+    if cross_verify_file is None:
+        cross_verify_file = r"C:\Users\bhoja\OneDrive - SJW SHIVAM JEWELS PRIVATE LIMITED\Pricing Regular Related Demo 02-05-2026\Input 07-08-2026\Cross_Verify_Sales_Actions.xlsx"
 
-        # Apply the same base formatting/layout as the attached expected file.
-        apply_sheet1_base_format(writer.book['Sheet1'])
+    export_auto_pricing_workbook(
+        output_file=output_file,
+        df_upgraded=df_upgraded,
+        df_180_output=df_180_output,
+        df_120_output=df_120_output,
+        action_output_sheets=action_output_sheets
+    )
 
-        # IMPORTANT SOURCE MAPPING:
-        # Sale_segment = untouched rows/columns from sales_180_file.xlsx
-        # Avg_Rate     = untouched rows/columns from sales_120_file.xlsx
-        # These copies are captured before normalization/helper columns are added,
-        # so the output tabs remain the same as their source input files.
-        df_180_output.to_excel(writer, sheet_name='Sale_segment', index=False)
-        df_120_output.to_excel(writer, sheet_name='Avg_Rate', index=False)
-
-        requested_action_sheet_order = [
-            'Hold',
-            'Wishlist',
-            'View',
-            'Offer',
-            'Cart'
-        ]
-
-        for sheet_name in requested_action_sheet_order:
-            if sheet_name in action_output_sheets:
-                action_output_sheets[sheet_name].to_excel(
-                    writer,
-                    sheet_name=sheet_name,
-                    index=False
-                )
-
-    # Keep the existing cross-verification output as a separate file.
-    df_verify.to_excel(cross_verify_file, index=False)
+    export_single_dataframe_workbook(
+        output_file=cross_verify_file,
+        df=df_verify,
+        sheet_name='Sheet1'
+    )
 
     print(
-        "\n✅ Processing complete. Files saved: "
+        "\nProcessing complete. Files saved: "
         "'Auto pricing revision.xlsx' and 'Cross_Verify_Sales_Actions.xlsx'"
     )
 
 
 # --- Execution ---
+print(f"[Auto Pricing] Loaded {SAFE_BUILD_ID} from: {os.path.abspath(__file__)}")
 action_files = {
     "View": r"C:\Users\bhoja\OneDrive - SJW SHIVAM JEWELS PRIVATE LIMITED\Pricing Regular Related Demo 02-05-2026\Input 07-08-2026\View.xlsx",
     "Hold": r"C:\Users\bhoja\OneDrive - SJW SHIVAM JEWELS PRIVATE LIMITED\Pricing Regular Related Demo 02-05-2026\Input 07-08-2026\Hold.xlsx",
