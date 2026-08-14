@@ -83,7 +83,7 @@ def process_stock_upgrade(
     sales_180_file,
     sales_120_file,
     action_files_dict,
-    output_file,
+    output_file=None,
     cross_verify_file=None
 ):
 
@@ -541,6 +541,13 @@ def process_stock_upgrade(
     # =====================================================================
     # 9. EXPORT - MATCH THE REFERENCE WORKBOOK STRUCTURE
     # =====================================================================
+
+    if output_file is None:
+        output_file = (
+            r"C:\Users\bhoja\OneDrive - SJW SHIVAM JEWELS PRIVATE LIMITED"
+            r"\Pricing Regular Related Demo 02-05-2026\Input 07-08-2026"
+            r"\Auto pricing revision.xlsx"
+        )
 
     os.makedirs(os.path.dirname(output_file) or ".", exist_ok=True)
 
