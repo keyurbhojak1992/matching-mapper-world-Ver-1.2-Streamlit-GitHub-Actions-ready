@@ -87,6 +87,14 @@ def process_stock_upgrade(
     cross_verify_file=None
 ):
 
+    # Backward compatibility with the original 4-argument call.
+    if output_file is None:
+        output_file = (
+            r"C:\Users\bhoja\OneDrive - SJW SHIVAM JEWELS PRIVATE LIMITED"
+            r"\Pricing Regular Related Demo 02-05-2026\Input 07-08-2026"
+            r"\Auto pricing revision.xlsx"
+        )
+
     # 1. Load Data
     # Keep untouched copies for the source tabs in the final workbook.
     df_stock_source = pd.read_excel(stock_file)
@@ -541,13 +549,6 @@ def process_stock_upgrade(
     # =====================================================================
     # 9. EXPORT - MATCH THE REFERENCE WORKBOOK STRUCTURE
     # =====================================================================
-
-    if output_file is None:
-        output_file = (
-            r"C:\Users\bhoja\OneDrive - SJW SHIVAM JEWELS PRIVATE LIMITED"
-            r"\Pricing Regular Related Demo 02-05-2026\Input 07-08-2026"
-            r"\Auto pricing revision.xlsx"
-        )
 
     os.makedirs(os.path.dirname(output_file) or ".", exist_ok=True)
 
