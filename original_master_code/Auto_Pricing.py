@@ -534,50 +534,26 @@ def process_stock_upgrade(
         existing_priority_columns + remaining_columns
     ]
 
-    # =====================================================================
     # 9. Export Files
-    # =====================================================================
+    df_upgraded.to_excel(r"C:\Users\bhoja\OneDrive - SJW SHIVAM JEWELS PRIVATE LIMITED\Pricing Regular Related Demo 02-05-2026\Input 07-08-2026\Auto pricing revision.xlsx", index=False)
+    df_verify.to_excel(r"C:\Users\bhoja\OneDrive - SJW SHIVAM JEWELS PRIVATE LIMITED\Pricing Regular Related Demo 02-05-2026\Input 07-08-2026\Cross_Verify_Sales_Actions.xlsx", index=False)
 
-    df_upgraded.to_excel(
-        r"C:\Users\bhoja\OneDrive - SJW SHIVAM JEWELS PRIVATE LIMITED\Pricing Regular Related Demo 02-05-2026\Input 07-08-2026\Auto pricing revision.xlsx",
-        index=False
-    )
-
-    df_verify.to_excel(
-        r"C:\Users\bhoja\OneDrive - SJW SHIVAM JEWELS PRIVATE LIMITED\Pricing Regular Related Demo 02-05-2026\Input 07-08-2026\Cross_Verify_Sales_Actions.xlsx",
-        index=False
-    )
-
-    print(
-        "\n✅ Processing complete. Files saved: "
-        "'Upgraded_Stock_Master_Demo_1.xlsx' and "
-        "'Cross_Verify_Sales_Actions.xlsx'"
-    )
+    print("\n✅ Processing complete. Files saved: 'Upgraded_Stock_Master_Demo_1.xlsx' and 'Cross_Verify_Sales_Actions.xlsx'")
 
 
 # --- Execution ---
 action_files = {
     "View": r"C:\Users\bhoja\OneDrive - SJW SHIVAM JEWELS PRIVATE LIMITED\Pricing Regular Related Demo 02-05-2026\Input 07-08-2026\View.xlsx",
-
     "Hold": r"C:\Users\bhoja\OneDrive - SJW SHIVAM JEWELS PRIVATE LIMITED\Pricing Regular Related Demo 02-05-2026\Input 07-08-2026\Hold.xlsx",
-
     "Offer": r"C:\Users\bhoja\OneDrive - SJW SHIVAM JEWELS PRIVATE LIMITED\Pricing Regular Related Demo 02-05-2026\Input 07-08-2026\Offer.xlsx",
-
     "Wishlist": r"C:\Users\bhoja\OneDrive - SJW SHIVAM JEWELS PRIVATE LIMITED\Pricing Regular Related Demo 02-05-2026\Input 07-08-2026\Wishlist.xlsx",
-
     "Cart": r"C:\Users\bhoja\OneDrive - SJW SHIVAM JEWELS PRIVATE LIMITED\Pricing Regular Related Demo 02-05-2026\Input 07-08-2026\Cart.xlsx",
-
-    "Media": r"C:\Users\bhoja\OneDrive - SJW SHIVAM JEWELS PRIVATE LIMITED\Pricing Regular Related Demo 02-05-2026\Input 07-08-2026\media.xlsx"
-    # Assuming you added a Media file based on your error log!
+    "Media": r"C:\Users\bhoja\OneDrive - SJW SHIVAM JEWELS PRIVATE LIMITED\Pricing Regular Related Demo 02-05-2026\Input 07-08-2026\media.xlsx" # Assuming you added a Media file based on your error log!
 }
-
 
 process_stock_upgrade(
     r"C:\Users\bhoja\OneDrive - SJW SHIVAM JEWELS PRIVATE LIMITED\Pricing Regular Related Demo 02-05-2026\Input 07-08-2026\Stock file.xlsx",
-
     r"C:\Users\bhoja\OneDrive - SJW SHIVAM JEWELS PRIVATE LIMITED\Pricing Regular Related Demo 02-05-2026\Input 07-08-2026\sales_180_file.xlsx",
-
     r"C:\Users\bhoja\OneDrive - SJW SHIVAM JEWELS PRIVATE LIMITED\Pricing Regular Related Demo 02-05-2026\Input 07-08-2026\sales_120_file.xlsx",
-
     action_files
 )
