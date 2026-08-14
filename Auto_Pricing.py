@@ -1,80 +1,5 @@
 import pandas as pd
 import numpy as np
-from openpyxl import load_workbook
-from openpyxl.styles import Alignment, Border, Font, Side
-from openpyxl.utils import get_column_letter
-
-
-# Sheet1 formatting copied from the attached expected Auto Pricing workbook.
-# Only output presentation is changed; pricing/action calculations stay untouched.
-SHEET1_BASE_WIDTHS = {
-    'A': 9.0,
-    'B': 6.28515625,
-    'C': 5.5703125,
-    'D': 9.85546875,
-    'E': 11.140625,
-    'F': 5.5703125,
-    'G': 4.5703125,
-    'H': 3.85546875,
-    'I': 4.7109375,
-    'J': 13.0,
-    'K': 5.28515625,
-    'L': 6.0,
-    'M': 7.7109375,
-    'N': 10.0,
-    'O': 22.5703125,
-    'P': 7.7109375,
-    'Q': 13.0,
-    'R': 33.5703125,
-    'S': 20.28515625,
-    'T': 30.7109375,
-    'U': 10.5703125,
-    'V': 12.7109375,
-    'W': 16.85546875,
-}
-
-
-def apply_sheet1_base_format(ws):
-    """Apply the same base table format as the expected workbook's Sheet1."""
-    thin = Side(style='thin', color='000000')
-    table_border = Border(left=thin, right=thin, top=thin, bottom=thin)
-    header_font = Font(name='Calibri', size=11, bold=True)
-    body_font = Font(name='Calibri', size=11, bold=False)
-    header_alignment = Alignment(horizontal='center', vertical='top')
-    body_alignment = Alignment(horizontal='center')
-
-    # Match the expected workbook widths for the first 23 requested columns.
-    for col_letter, width in SHEET1_BASE_WIDTHS.items():
-        ws.column_dimensions[col_letter].width = width
-
-    # Extra output columns must remain behind the 23 requested columns.
-    # Give them the same table format and a practical content-based width.
-    for col_idx in range(24, ws.max_column + 1):
-        col_letter = get_column_letter(col_idx)
-        header = ws.cell(row=1, column=col_idx).value
-        max_len = len(str(header)) if header is not None else 0
-
-        # Sample rows for width calculation to avoid slowing very large files.
-        sample_last_row = min(ws.max_row, 1000)
-        for row_idx in range(2, sample_last_row + 1):
-            value = ws.cell(row=row_idx, column=col_idx).value
-            if value is not None:
-                max_len = max(max_len, len(str(value)))
-
-        ws.column_dimensions[col_letter].width = min(max(max_len + 2, 10), 40)
-
-    # Header formatting.
-    for cell in ws[1]:
-        cell.font = header_font
-        cell.alignment = header_alignment
-        cell.border = table_border
-
-    # Data formatting.
-    for row in ws.iter_rows(min_row=2, max_row=ws.max_row, max_col=ws.max_column):
-        for cell in row:
-            cell.font = body_font
-            cell.alignment = body_alignment
-            cell.border = table_border
 
 
 def format_weight(val):
@@ -161,12 +86,6 @@ def process_stock_upgrade(
     df_stock = pd.read_excel(stock_file)
     df_180 = pd.read_excel(sales_180_file)
     df_120 = pd.read_excel(sales_120_file)
-
-    # Keep untouched source data ONLY for the final multi-sheet output workbook.
-    # The processing dataframes below continue to use the existing logic unchanged.
-    df_180_output = df_180.copy()
-    df_120_output = df_120.copy()
-    action_output_sheets = {}
 
     # 1B. Normalize Columns and Ensure 'Tag' Exists
     df_stock = normalize_base_columns(df_stock)
@@ -283,10 +202,6 @@ def process_stock_upgrade(
 
         try:
             df_action = pd.read_excel(file_path)
-
-            # Keep the original action-file columns for the output workbook tab.
-            # This copy is not used by the calculation logic.
-            action_output_sheets[action_name] = df_action.copy()
 
             # --- DYNAMIC FUZZY COLUMN MATCHER ---
             action_party_col = None
@@ -620,67 +535,10 @@ def process_stock_upgrade(
     ]
 
     # 9. Export Files
-    # Auto Pricing output is now ONE workbook matching the requested structure:
-    # Sheet1, Sale_segment, Avg_Rate, Hold, Wishlist, View, Offer, Cart.
-    # Media can still be used in the existing calculation logic, but it is not
-    # added as an output tab because it is not part of the expected workbook.
-    output_file = r"C:\Users\bhoja\OneDrive - SJW SHIVAM JEWELS PRIVATE LIMITED\Pricing Regular Related Demo 02-05-2026\Input 07-08-2026\Auto pricing revision.xlsx"
-    cross_verify_file = r"C:\Users\bhoja\OneDrive - SJW SHIVAM JEWELS PRIVATE LIMITED\Pricing Regular Related Demo 02-05-2026\Input 07-08-2026\Cross_Verify_Sales_Actions.xlsx"
+    df_upgraded.to_excel(r"C:\Users\bhoja\OneDrive - SJW SHIVAM JEWELS PRIVATE LIMITED\Pricing Regular Related Demo 02-05-2026\Input 07-08-2026\Auto pricing revision.xlsx", index=False)
+    df_verify.to_excel(r"C:\Users\bhoja\OneDrive - SJW SHIVAM JEWELS PRIVATE LIMITED\Pricing Regular Related Demo 02-05-2026\Input 07-08-2026\Cross_Verify_Sales_Actions.xlsx", index=False)
 
-    # Use an explicit ExcelWriter instead of a `with` block.
-    # This avoids the indentation/parser issue reported by the app while
-    # preserving the exact same workbook output.
-    writer = pd.ExcelWriter(output_file, engine='openpyxl')
-
-    # Main processed output. The 23 requested columns are already first,
-    # and every other existing output column is kept after them.
-    df_upgraded.to_excel(writer, sheet_name='Sheet1', index=False)
-
-    # IMPORTANT SOURCE MAPPING:
-    # Sale_segment = untouched rows/columns from sales_180_file.xlsx
-    # Avg_Rate     = untouched rows/columns from sales_120_file.xlsx
-    df_180_output.to_excel(writer, sheet_name='Sale_segment', index=False)
-    df_120_output.to_excel(writer, sheet_name='Avg_Rate', index=False)
-
-    requested_action_sheet_order = [
-        'Hold',
-        'Wishlist',
-        'View',
-        'Offer',
-        'Cart'
-    ]
-
-    for sheet_name in requested_action_sheet_order:
-        if sheet_name in action_output_sheets:
-            action_output_sheets[sheet_name].to_excel(
-                writer,
-                sheet_name=sheet_name,
-                index=False
-            )
-
-    # Explicitly save and close the workbook FIRST.
-    # Formatting is applied only after the workbook exists on disk, so Sheet1
-    # is guaranteed to exist before openpyxl tries to access it.
-    writer.close()
-
-    # Reopen the completed workbook and format Sheet1 safely.
-    output_wb = load_workbook(output_file)
-    if 'Sheet1' not in output_wb.sheetnames:
-        raise KeyError(
-            f"Sheet1 was not created in the Auto Pricing output workbook. "
-            f"Available sheets: {output_wb.sheetnames}"
-        )
-    apply_sheet1_base_format(output_wb['Sheet1'])
-    output_wb.save(output_file)
-    output_wb.close()
-
-    # Keep the existing cross-verification output as a separate file.
-    df_verify.to_excel(cross_verify_file, index=False)
-
-    print(
-        "\n✅ Processing complete. Files saved: "
-        "'Auto pricing revision.xlsx' and 'Cross_Verify_Sales_Actions.xlsx'"
-    )
+    print("\n✅ Processing complete. Files saved: 'Upgraded_Stock_Master_Demo_1.xlsx' and 'Cross_Verify_Sales_Actions.xlsx'")
 
 
 # --- Execution ---
