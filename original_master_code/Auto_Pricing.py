@@ -546,59 +546,59 @@ def process_stock_upgrade(
 
     # Reference workbook sheet order:
     # Sheet1, Sale_segment, Avg_Rate, Hold, Wishlist, View, Offer, Cart
-    with pd.ExcelWriter(output_file, engine='openpyxl') as writer:
-        df_upgraded.to_excel(writer, sheet_name='Sheet1', index=False)
-        df_180_source.to_excel(writer, sheet_name='Sale_segment', index=False)
-        df_120_source.to_excel(writer, sheet_name='Avg_Rate', index=False)
+    writer = pd.ExcelWriter(output_file, engine='openpyxl')
+    df_upgraded.to_excel(writer, sheet_name='Sheet1', index=False)
+    df_180_source.to_excel(writer, sheet_name='Sale_segment', index=False)
+    df_120_source.to_excel(writer, sheet_name='Avg_Rate', index=False)
 
-        reference_action_order = [
-            'Hold',
-            'Wishlist',
-            'View',
-            'Offer',
-            'Cart'
-        ]
+    reference_action_order = [
+        'Hold',
+        'Wishlist',
+        'View',
+        'Offer',
+        'Cart'
+    ]
 
-        for action_name in reference_action_order:
-            if action_name in raw_action_sheets:
-                raw_action_sheets[action_name].to_excel(
-                    writer,
-                    sheet_name=action_name,
-                    index=False
-                )
+    for action_name in reference_action_order:
+        if action_name in raw_action_sheets:
+            raw_action_sheets[action_name].to_excel(
+                writer,
+                sheet_name=action_name,
+                index=False
+            )
 
-        # Format Sheet1 to match the attached reference output.
-        ws = writer.book['Sheet1']
-        thin = Side(style='thin')
-        border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    # Format Sheet1 to match the attached reference output.
+    ws = writer.book['Sheet1']
+    thin = Side(style='thin')
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
 
-        reference_widths = {
-            'A': 9.0, 'B': 6.29, 'C': 5.57, 'D': 9.86, 'E': 11.14,
-            'F': 5.57, 'G': 4.57, 'H': 3.86, 'I': 4.71, 'J': 13.0,
-            'K': 5.29, 'L': 6.0, 'M': 7.71, 'N': 10.0, 'O': 22.57,
-            'P': 7.71, 'Q': 13.0, 'R': 33.57, 'S': 20.29, 'T': 30.71,
-            'U': 10.57, 'V': 12.71, 'W': 16.86
-        }
+    reference_widths = {
+        'A': 9.0, 'B': 6.29, 'C': 5.57, 'D': 9.86, 'E': 11.14,
+        'F': 5.57, 'G': 4.57, 'H': 3.86, 'I': 4.71, 'J': 13.0,
+        'K': 5.29, 'L': 6.0, 'M': 7.71, 'N': 10.0, 'O': 22.57,
+        'P': 7.71, 'Q': 13.0, 'R': 33.57, 'S': 20.29, 'T': 30.71,
+        'U': 10.57, 'V': 12.71, 'W': 16.86
+    }
 
-        for col_letter, width in reference_widths.items():
-            ws.column_dimensions[col_letter].width = width
+    for col_letter, width in reference_widths.items():
+        ws.column_dimensions[col_letter].width = width
 
-        header_font = Font(name='Calibri', size=11, bold=True)
-        body_font = Font(name='Calibri', size=11)
-        header_alignment = Alignment(horizontal='center', vertical='top')
-        body_alignment = Alignment(horizontal='center')
+    header_font = Font(name='Calibri', size=11, bold=True)
+    body_font = Font(name='Calibri', size=11)
+    header_alignment = Alignment(horizontal='center', vertical='top')
+    body_alignment = Alignment(horizontal='center')
 
-        for cell in ws[1]:
-            cell.font = header_font
-            cell.alignment = header_alignment
+    for cell in ws[1]:
+        cell.font = header_font
+        cell.alignment = header_alignment
+        cell.border = border
+
+    for row in ws.iter_rows(min_row=2):
+        for cell in row:
+            cell.font = body_font
+            cell.alignment = body_alignment
             cell.border = border
-
-        for row in ws.iter_rows(min_row=2):
-            for cell in row:
-                cell.font = body_font
-                cell.alignment = body_alignment
-                cell.border = border
-
+    writer.close()
     # Keep the cross-verification workbook as a separate optional output.
     if cross_verify_file:
         os.makedirs(os.path.dirname(cross_verify_file) or ".", exist_ok=True)
