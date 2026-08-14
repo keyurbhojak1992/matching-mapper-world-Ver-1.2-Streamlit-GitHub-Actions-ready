@@ -1,4 +1,5 @@
 import os
+from io import BytesIO
 
 import pandas as pd
 import numpy as np
@@ -88,12 +89,8 @@ def process_stock_upgrade(
 ):
 
     # Backward compatibility with the original 4-argument call.
-    if output_file is None:
-        output_file = (
-            r"C:\Users\bhoja\OneDrive - SJW SHIVAM JEWELS PRIVATE LIMITED"
-            r"\Pricing Regular Related Demo 02-05-2026\Input 07-08-2026"
-            r"\Auto pricing revision.xlsx"
-        )
+    # If no output path is supplied, return the generated workbook in memory.
+    output_buffer = BytesIO() if output_file is None else None
 
     # 1. Load Data
     # Keep untouched copies for the source tabs in the final workbook.
@@ -550,11 +547,13 @@ def process_stock_upgrade(
     # 9. EXPORT - MATCH THE REFERENCE WORKBOOK STRUCTURE
     # =====================================================================
 
-    os.makedirs(os.path.dirname(output_file) or ".", exist_ok=True)
+    if output_file is not None:
+        os.makedirs(os.path.dirname(output_file) or ".", exist_ok=True)
 
     # Reference workbook sheet order:
     # Sheet1, Sale_segment, Avg_Rate, Hold, Wishlist, View, Offer, Cart
-    writer = pd.ExcelWriter(output_file, engine='openpyxl')
+    output_target = output_buffer if output_buffer is not None else output_file
+    writer = pd.ExcelWriter(output_target, engine='openpyxl')
     df_upgraded.to_excel(writer, sheet_name='Sheet1', index=False)
     df_180_source.to_excel(writer, sheet_name='Sale_segment', index=False)
     df_120_source.to_excel(writer, sheet_name='Avg_Rate', index=False)
@@ -612,9 +611,15 @@ def process_stock_upgrade(
         os.makedirs(os.path.dirname(cross_verify_file) or ".", exist_ok=True)
         df_verify.to_excel(cross_verify_file, index=False)
 
+    if output_buffer is not None:
+        output_buffer.seek(0)
+        return output_buffer
+
     print(f"\n✅ Processing complete. Main output saved: {output_file}")
     if cross_verify_file:
         print(f"✅ Cross verification saved: {cross_verify_file}")
+
+    return output_file
 
 
 if __name__ == '__main__':
