@@ -1,5 +1,8 @@
+import os
+
 import pandas as pd
 import numpy as np
+from openpyxl.styles import Alignment, Border, Font, Side
 
 
 def format_weight(val):
@@ -79,13 +82,21 @@ def process_stock_upgrade(
     stock_file,
     sales_180_file,
     sales_120_file,
-    action_files_dict
+    action_files_dict,
+    output_file,
+    cross_verify_file=None
 ):
 
     # 1. Load Data
-    df_stock = pd.read_excel(stock_file)
-    df_180 = pd.read_excel(sales_180_file)
-    df_120 = pd.read_excel(sales_120_file)
+    # Keep untouched copies for the source tabs in the final workbook.
+    df_stock_source = pd.read_excel(stock_file)
+    df_180_source = pd.read_excel(sales_180_file)
+    df_120_source = pd.read_excel(sales_120_file)
+
+    # Work on copies so normalization does not change source-sheet headings.
+    df_stock = df_stock_source.copy()
+    df_180 = df_180_source.copy()
+    df_120 = df_120_source.copy()
 
     # 1B. Normalize Columns and Ensure 'Tag' Exists
     df_stock = normalize_base_columns(df_stock)
@@ -193,6 +204,7 @@ def process_stock_upgrade(
         df_verify[f"{action_name}_All_Count"] = 0
 
     master_actions_accumulator = []
+    raw_action_sheets = {}
 
     # 6. Process Action Files
     for action_name, file_path in action_files_dict.items():
@@ -202,6 +214,7 @@ def process_stock_upgrade(
 
         try:
             df_action = pd.read_excel(file_path)
+            raw_action_sheets[action_name] = df_action.copy()
 
             # --- DYNAMIC FUZZY COLUMN MATCHER ---
             action_party_col = None
@@ -219,8 +232,8 @@ def process_stock_upgrade(
                 if clean_col in [
                     'soldparty',
                     'party',
-                    'PARTY_NAME',
-                    'PARTY_COMPANY_NAME'
+                    'partyname',
+                    'partycompanyname'
                 ]:
                     action_party_col = col
 
@@ -228,8 +241,7 @@ def process_stock_upgrade(
                     'serialno',
                     'stoneid',
                     'stockno',
-                    'id',
-                    'STONE_ID'
+                    'id'
                 ]:
                     action_serial_col = col
 
@@ -522,38 +534,107 @@ def process_stock_upgrade(
         if col in df_upgraded.columns
     ]
 
-    # Keep all other existing columns after the requested columns
-    remaining_columns = [
-        col
-        for col in df_upgraded.columns
-        if col not in existing_priority_columns
-    ]
+    # The reference output contains exactly these 23 columns.
+    # Do NOT append temporary per-action helper columns to Sheet1.
+    df_upgraded = df_upgraded[existing_priority_columns]
 
-    # Apply final column sequence
-    df_upgraded = df_upgraded[
-        existing_priority_columns + remaining_columns
-    ]
+    # =====================================================================
+    # 9. EXPORT - MATCH THE REFERENCE WORKBOOK STRUCTURE
+    # =====================================================================
 
-    # 9. Export Files
-    df_upgraded.to_excel(r"C:\Users\bhoja\OneDrive - SJW SHIVAM JEWELS PRIVATE LIMITED\Pricing Regular Related Demo 02-05-2026\Input 07-08-2026\Auto pricing revision.xlsx", index=False)
-    df_verify.to_excel(r"C:\Users\bhoja\OneDrive - SJW SHIVAM JEWELS PRIVATE LIMITED\Pricing Regular Related Demo 02-05-2026\Input 07-08-2026\Cross_Verify_Sales_Actions.xlsx", index=False)
+    os.makedirs(os.path.dirname(output_file) or ".", exist_ok=True)
 
-    print("\n✅ Processing complete. Files saved: 'Upgraded_Stock_Master_Demo_1.xlsx' and 'Cross_Verify_Sales_Actions.xlsx'")
+    # Reference workbook sheet order:
+    # Sheet1, Sale_segment, Avg_Rate, Hold, Wishlist, View, Offer, Cart
+    with pd.ExcelWriter(output_file, engine='openpyxl') as writer:
+        df_upgraded.to_excel(writer, sheet_name='Sheet1', index=False)
+        df_180_source.to_excel(writer, sheet_name='Sale_segment', index=False)
+        df_120_source.to_excel(writer, sheet_name='Avg_Rate', index=False)
+
+        reference_action_order = [
+            'Hold',
+            'Wishlist',
+            'View',
+            'Offer',
+            'Cart'
+        ]
+
+        for action_name in reference_action_order:
+            if action_name in raw_action_sheets:
+                raw_action_sheets[action_name].to_excel(
+                    writer,
+                    sheet_name=action_name,
+                    index=False
+                )
+
+        # Format Sheet1 to match the attached reference output.
+        ws = writer.book['Sheet1']
+        thin = Side(style='thin')
+        border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+        reference_widths = {
+            'A': 9.0, 'B': 6.29, 'C': 5.57, 'D': 9.86, 'E': 11.14,
+            'F': 5.57, 'G': 4.57, 'H': 3.86, 'I': 4.71, 'J': 13.0,
+            'K': 5.29, 'L': 6.0, 'M': 7.71, 'N': 10.0, 'O': 22.57,
+            'P': 7.71, 'Q': 13.0, 'R': 33.57, 'S': 20.29, 'T': 30.71,
+            'U': 10.57, 'V': 12.71, 'W': 16.86
+        }
+
+        for col_letter, width in reference_widths.items():
+            ws.column_dimensions[col_letter].width = width
+
+        header_font = Font(name='Calibri', size=11, bold=True)
+        body_font = Font(name='Calibri', size=11)
+        header_alignment = Alignment(horizontal='center', vertical='top')
+        body_alignment = Alignment(horizontal='center')
+
+        for cell in ws[1]:
+            cell.font = header_font
+            cell.alignment = header_alignment
+            cell.border = border
+
+        for row in ws.iter_rows(min_row=2):
+            for cell in row:
+                cell.font = body_font
+                cell.alignment = body_alignment
+                cell.border = border
+
+    # Keep the cross-verification workbook as a separate optional output.
+    if cross_verify_file:
+        os.makedirs(os.path.dirname(cross_verify_file) or ".", exist_ok=True)
+        df_verify.to_excel(cross_verify_file, index=False)
+
+    print(f"\n✅ Processing complete. Main output saved: {output_file}")
+    if cross_verify_file:
+        print(f"✅ Cross verification saved: {cross_verify_file}")
 
 
-# --- Execution ---
-action_files = {
-    "View": r"C:\Users\bhoja\OneDrive - SJW SHIVAM JEWELS PRIVATE LIMITED\Pricing Regular Related Demo 02-05-2026\Input 07-08-2026\View.xlsx",
-    "Hold": r"C:\Users\bhoja\OneDrive - SJW SHIVAM JEWELS PRIVATE LIMITED\Pricing Regular Related Demo 02-05-2026\Input 07-08-2026\Hold.xlsx",
-    "Offer": r"C:\Users\bhoja\OneDrive - SJW SHIVAM JEWELS PRIVATE LIMITED\Pricing Regular Related Demo 02-05-2026\Input 07-08-2026\Offer.xlsx",
-    "Wishlist": r"C:\Users\bhoja\OneDrive - SJW SHIVAM JEWELS PRIVATE LIMITED\Pricing Regular Related Demo 02-05-2026\Input 07-08-2026\Wishlist.xlsx",
-    "Cart": r"C:\Users\bhoja\OneDrive - SJW SHIVAM JEWELS PRIVATE LIMITED\Pricing Regular Related Demo 02-05-2026\Input 07-08-2026\Cart.xlsx",
-    "Media": r"C:\Users\bhoja\OneDrive - SJW SHIVAM JEWELS PRIVATE LIMITED\Pricing Regular Related Demo 02-05-2026\Input 07-08-2026\media.xlsx" # Assuming you added a Media file based on your error log!
-}
+if __name__ == '__main__':
+    # --- Execution / Paths ---
+    base_dir = (
+        r"C:\Users\bhoja\OneDrive - SJW SHIVAM JEWELS PRIVATE LIMITED"
+        r"\Pricing Regular Related Demo 02-05-2026\Input 07-08-2026"
+    )
 
-process_stock_upgrade(
-    r"C:\Users\bhoja\OneDrive - SJW SHIVAM JEWELS PRIVATE LIMITED\Pricing Regular Related Demo 02-05-2026\Input 07-08-2026\Stock file.xlsx",
-    r"C:\Users\bhoja\OneDrive - SJW SHIVAM JEWELS PRIVATE LIMITED\Pricing Regular Related Demo 02-05-2026\Input 07-08-2026\sales_180_file.xlsx",
-    r"C:\Users\bhoja\OneDrive - SJW SHIVAM JEWELS PRIVATE LIMITED\Pricing Regular Related Demo 02-05-2026\Input 07-08-2026\sales_120_file.xlsx",
-    action_files
-)
+    action_files = {
+        'Hold': os.path.join(base_dir, 'Hold.xlsx'),
+        'Wishlist': os.path.join(base_dir, 'Wishlist.xlsx'),
+        'View': os.path.join(base_dir, 'View.xlsx'),
+        'Offer': os.path.join(base_dir, 'Offer.xlsx'),
+        'Cart': os.path.join(base_dir, 'Cart.xlsx')
+    }
+
+    process_stock_upgrade(
+        os.path.join(base_dir, 'Stock file.xlsx'),
+        os.path.join(base_dir, 'sales_180_file.xlsx'),
+        os.path.join(base_dir, 'sales_120_file.xlsx'),
+        action_files,
+        output_file=os.path.join(
+            base_dir,
+            'Auto pricing revision 14-08-2026.xlsx'
+        ),
+        cross_verify_file=os.path.join(
+            base_dir,
+            'Cross_Verify_Sales_Actions.xlsx'
+        )
+    )
