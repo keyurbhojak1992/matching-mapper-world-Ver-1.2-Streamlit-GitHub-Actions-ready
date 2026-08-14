@@ -626,37 +626,42 @@ def process_stock_upgrade(
     output_file = r"C:\Users\bhoja\OneDrive - SJW SHIVAM JEWELS PRIVATE LIMITED\Pricing Regular Related Demo 02-05-2026\Input 07-08-2026\Auto pricing revision.xlsx"
     cross_verify_file = r"C:\Users\bhoja\OneDrive - SJW SHIVAM JEWELS PRIVATE LIMITED\Pricing Regular Related Demo 02-05-2026\Input 07-08-2026\Cross_Verify_Sales_Actions.xlsx"
 
-    with pd.ExcelWriter(output_file, engine='openpyxl') as writer:
-        # Main processed output. The 23 requested columns are already first,
-        # and every other existing output column is kept after them.
-        df_upgraded.to_excel(writer, sheet_name='Sheet1', index=False)
+    # Use an explicit ExcelWriter instead of a `with` block.
+    # This avoids the indentation/parser issue reported by the app while
+    # preserving the exact same workbook output.
+    writer = pd.ExcelWriter(output_file, engine='openpyxl')
 
-        # Apply the same base formatting/layout as the attached expected file.
-        apply_sheet1_base_format(writer.book['Sheet1'])
+    # Main processed output. The 23 requested columns are already first,
+    # and every other existing output column is kept after them.
+    df_upgraded.to_excel(writer, sheet_name='Sheet1', index=False)
 
-        # IMPORTANT SOURCE MAPPING:
-        # Sale_segment = untouched rows/columns from sales_180_file.xlsx
-        # Avg_Rate     = untouched rows/columns from sales_120_file.xlsx
-        # These copies are captured before normalization/helper columns are added,
-        # so the output tabs remain the same as their source input files.
-        df_180_output.to_excel(writer, sheet_name='Sale_segment', index=False)
-        df_120_output.to_excel(writer, sheet_name='Avg_Rate', index=False)
+    # Apply the same base formatting/layout as the attached expected file.
+    apply_sheet1_base_format(writer.book['Sheet1'])
 
-        requested_action_sheet_order = [
-            'Hold',
-            'Wishlist',
-            'View',
-            'Offer',
-            'Cart'
-        ]
+    # IMPORTANT SOURCE MAPPING:
+    # Sale_segment = untouched rows/columns from sales_180_file.xlsx
+    # Avg_Rate     = untouched rows/columns from sales_120_file.xlsx
+    df_180_output.to_excel(writer, sheet_name='Sale_segment', index=False)
+    df_120_output.to_excel(writer, sheet_name='Avg_Rate', index=False)
 
-        for sheet_name in requested_action_sheet_order:
-            if sheet_name in action_output_sheets:
-                action_output_sheets[sheet_name].to_excel(
-                    writer,
-                    sheet_name=sheet_name,
-                    index=False
-                )
+    requested_action_sheet_order = [
+        'Hold',
+        'Wishlist',
+        'View',
+        'Offer',
+        'Cart'
+    ]
+
+    for sheet_name in requested_action_sheet_order:
+        if sheet_name in action_output_sheets:
+            action_output_sheets[sheet_name].to_excel(
+                writer,
+                sheet_name=sheet_name,
+                index=False
+            )
+
+    # Explicitly save and close the workbook.
+    writer.close()
 
     # Keep the existing cross-verification output as a separate file.
     df_verify.to_excel(cross_verify_file, index=False)
