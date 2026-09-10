@@ -5,14 +5,12 @@ import io
 import subprocess
 import sys
 import zipfile
-from datetime import datetime
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 import pandas as pd
-from openpyxl import Workbook, load_workbook
+from openpyxl import load_workbook
 
-from adapters.auto_pricing_adapter import AUTOPRICE_VERSION, PACKAGE_DIR as AUTOPRICE_PACKAGE_DIR, run_auto_pricing
+from adapters.auto_pricing_adapter import ACTION_NAMES, run_auto_pricing
 from adapters.dealmaker_adapter import DEFAULT_CONTROL, PACKAGE_DIR, RUNNER, bundled_dealmaker_control_bytes
 from adapters.layout_stock_matcher_adapter import run_layout_stock_matcher
 
@@ -25,120 +23,58 @@ def _xlsx_bytes(frame: pd.DataFrame) -> bytes:
     return buffer.getvalue()
 
 
-def _zip_bytes(files: dict[str, bytes]) -> bytes:
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-        for name, payload in files.items():
-            zf.writestr(name, payload)
-    return buffer.getvalue()
+def test_auto_pricing_preserved_source_matches_uploaded_package_copy():
+    master = ROOT / "original_master_code" / "Auto_Pricing.py"
+    packaged = ROOT / "original_packages" / "Auto Pricing.txt"
+    assert master.read_bytes() == packaged.read_bytes()
 
 
-def _auto_pricing_template_bytes() -> bytes:
-    cart_headers = ["SERIAL_NO", "CREATED_DATETIME", "Sold Party"]
-    hold_headers = ["SERIAL_NO", "JANGAD_DATE", "Sold Party"]
-    view_headers = ["SEQ_NO", "SERIAL_NO", "CREATED_DATETIME", "Sold Party"]
-    sheets = {
-        "Sheet1": [
-            "Serial No", "Shp", "Carat", "Carat_Grp", "Color name", "Qua", "Cut", "Pol", "Sym",
-            "Lab", "Flo", "GRap", "GPer", "Expected", "Sold_Avg_Rate_120days", "Diff", "Remark",
-            "Tag", "Unique_Buyer_Count", "Sold_Party", "sale_count", "Action_count", "ALL_Action_count",
-        ],
-        "Sale_segment": [
-            "Serial No", "Shp", "Carat", "Carat_Grp", "Col", "Qua", "Cut", "Pol", "Sym", "Lab", "Flo",
-            "Sold Party", "Sale Date", "SPer", "SRate", "Amt", "Date", "Tag",
-        ],
-        "Avg_Rate": [
-            "Serial No", "Shp", "Carat", "Carat_Grp", "Col", "Qua", "Cut", "Pol", "Sym", "Lab", "Flo",
-            "Sold Party", "Sale Date", "SPer", "SRate", "Amt", "Date", "Tag",
-        ],
-        "Hold": hold_headers + ["Date"],
-        "Wishlist": cart_headers,
-        "View": view_headers + ["Date"],
-        "Offer": cart_headers,
-        "Cart": cart_headers,
-    }
-    wb = Workbook()
-    wb.remove(wb.active)
-    for sheet_name, headers in sheets.items():
-        ws = wb.create_sheet(sheet_name)
-        ws.append(headers)
-        ws.append([None] * len(headers))
-    buffer = io.BytesIO()
-    wb.save(buffer)
-    return buffer.getvalue()
+def test_auto_pricing_adapter_preserves_core_counts_and_pricing_logic():
+    tag = "RBC-1.00-1.09-G-VS1-GIA-NON"
+    stock = _xlsx_bytes(pd.DataFrame([
+        {"Serial No": "S1", "Tag": tag, "Carat": 1.0, "Expected": 120},
+    ]))
+    sales_180 = _xlsx_bytes(pd.DataFrame([
+        {"Tag": tag, "Sold Party": "P1"},
+        {"Tag": tag, "Sold Party": "P1"},
+    ]))
+    sales_120 = _xlsx_bytes(pd.DataFrame([
+        {"Tag": tag, "Carat": 1.0, "Amt": 100},
+    ]))
+    view = _xlsx_bytes(pd.DataFrame([
+        {"Serial No": "S1", "Sold Party": "P1"},
+        {"Serial No": "S1", "Sold Party": "P2"},
+    ]))
+    action_files = {name: None for name in ACTION_NAMES}
+    action_files["View"] = view
 
-
-def test_auto_pricing_v4_1_3_package_is_bundled():
-    assert AUTOPRICE_VERSION == "4.1.3"
-    for filename in [
-        "process_datasets_v4_1_3.py",
-        "build_auto_pricing_v4_1_3.py",
-        "run_all_v4_1_3.py",
-        "column_mapping_aliases.json",
-    ]:
-        assert (AUTOPRICE_PACKAGE_DIR / filename).is_file()
-
-
-def test_auto_pricing_adapter_runs_v4_1_3_end_to_end():
-    today = datetime.now(ZoneInfo("Asia/Kolkata")).date().isoformat()
-    cart_headers = ["SERIAL_NO", "CREATED_DATETIME", "Sold Party"]
-    hold_headers = ["SERIAL_NO", "JANGAD_DATE", "Sold Party"]
-    view_headers = ["SEQ_NO", "SERIAL_NO", "CREATED_DATETIME", "Sold Party"]
-    sales_headers = ["Serial No", "Shp", "Carat", "Col", "Qua", "Cut", "Pol", "Sym", "Lab", "Flo", "Sold Party", "Sale Date", "SPer", "SRate"]
-    stock_headers = ["Serial No", "Shp", "Carat", "Carat_Grp", "Color name", "Qua", "Cut", "Pol", "Sym", "Lab", "Flo", "GRap", "GPer", "Expected", "Tag"]
-
-    previous = {
-        "Cart.xlsx": _xlsx_bytes(pd.DataFrame(columns=cart_headers)),
-        "Hold.xlsx": _xlsx_bytes(pd.DataFrame(columns=hold_headers)),
-        "Offer.xlsx": _xlsx_bytes(pd.DataFrame(columns=cart_headers)),
-        "View.xlsx": _xlsx_bytes(pd.DataFrame(columns=view_headers)),
-        "Wishlist.xlsx": _xlsx_bytes(pd.DataFrame(columns=cart_headers)),
-        "sales_120_file.xlsx": _xlsx_bytes(pd.DataFrame(columns=sales_headers)),
-        "sales_180_file.xlsx": _xlsx_bytes(pd.DataFrame(columns=sales_headers)),
-        "Stock file.xlsx": _xlsx_bytes(pd.DataFrame(columns=stock_headers)),
-    }
-    raw = {
-        "ADD_TO_CART.xlsx": _xlsx_bytes(pd.DataFrame([{"SERIAL_NO": "S1", "CREATED_DATETIME": today, "Sold Party": "P1"}])),
-        "JANGAD_HISTORY.xlsx": _xlsx_bytes(pd.DataFrame([{"SERIAL_NO": "S1", "JANGAD_DATE": today, "Sold Party": "P1"}])),
-        "OFFER_PLACE.xlsx": _xlsx_bytes(pd.DataFrame([{"SERIAL_NO": "S1", "CREATED_DATETIME": today, "Sold Party": "P1"}])),
-        "APPOINTMENT.xlsx": _xlsx_bytes(pd.DataFrame([{"SEQ_NO": 1, "SERIAL_NO": "S1", "CREATED_DATETIME": today, "Sold Party": "P1"}])),
-        "WISHLIST.xlsx": _xlsx_bytes(pd.DataFrame([{"SERIAL_NO": "S1", "CREATED_DATETIME": today, "Sold Party": "P1"}])),
-        "Sales.xlsx": _xlsx_bytes(pd.DataFrame([{
-            "Serial No": "S1", "Shp": "RBC", "Carat": 1.0, "Col": "G", "Qua": "VS1", "Cut": "EX",
-            "Pol": "EX", "Sym": "EX", "Lab": "GIA", "Flo": "NON", "Sold Party": "P1",
-            "Sale Date": today, "SPer": -10, "SRate": 100,
-        }])),
-        "Stock.xlsx": _xlsx_bytes(pd.DataFrame([{
-            "Serial No": "S1", "Shp": "RBC", "Carat": 1.0, "Color name": "G", "Qua": "VS1", "Cut": "EX",
-            "Pol": "EX", "Sym": "EX", "Lab": "GIA", "Flo": "NON", "GRap": 150, "GPer": -20, "Expected": 120,
-        }])),
-    }
-
-    data, filename, logs = run_auto_pricing(
-        raw_zip_bytes=_zip_bytes(raw),
-        previous_final_zip_bytes=_zip_bytes(previous),
-        template_bytes=_auto_pricing_template_bytes(),
+    data, filename, _ = run_auto_pricing(
+        stock_bytes=stock,
+        sales_180_bytes=sales_180,
+        sales_120_bytes=sales_120,
+        action_files=action_files,
     )
-    assert filename == "Auto_Pricing_v4_1_3_Output.zip"
-    assert "all_datasets_ok" in logs
+    assert filename == "Auto_Pricing_Output.zip"
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
-        names = zf.namelist()
-        assert "Processing_Audit.xlsx" in names
-        assert "processing_report.json" in names
-        assert any(name.startswith("Final_Base_Output_") for name in names)
-        final_name = next(name for name in names if name.startswith("Auto_pricing_FINAL_"))
-        wb = load_workbook(io.BytesIO(zf.read(final_name)), read_only=True, data_only=True)
+        assert zf.namelist() == [
+            "Auto pricing revision.xlsx",
+            "Cross_Verify_Sales_Actions.xlsx",
+        ]
+        output = pd.read_excel(io.BytesIO(zf.read("Auto pricing revision.xlsx")))
+        verify = pd.read_excel(io.BytesIO(zf.read("Cross_Verify_Sales_Actions.xlsx")))
 
-    ws = wb["Sheet1"]
-    row = dict(zip((cell.value for cell in ws[1]), (cell.value for cell in ws[2])))
-    assert row["Serial No"] == "S1"
+    row = output.iloc[0]
+    assert int(row["sale_count"]) == 2
+    assert int(row["Unique_Buyer_Count"]) == 1
     assert float(row["Sold_Avg_Rate_120days"]) == 100.0
+    assert int(row["View_Count"]) == 1
+    assert int(row["View_All_Count"]) == 2
+    assert int(row["Action_count"]) == 1
+    assert int(row["ALL_Action_count"]) == 2
     assert float(row["Diff"]) == 16.67
     assert row["Remark"] == "Yes"
-    assert int(row["Unique_Buyer_Count"]) == 1
-    assert int(row["sale_count"]) == 1
-    assert int(row["Action_count"]) == 1
-    assert int(row["ALL_Action_count"]) == 1
+    assert int(verify.iloc[0]["View_Count"]) == 1
+
 
 def test_layout_stock_matcher_adapter_uses_source_defaults_and_output_shape():
     layout = pd.DataFrame([

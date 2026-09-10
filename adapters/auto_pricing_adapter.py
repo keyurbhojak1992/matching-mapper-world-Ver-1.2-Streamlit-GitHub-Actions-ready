@@ -1,134 +1,99 @@
 from __future__ import annotations
 
 import io
-import subprocess
-import sys
+import re
 import tempfile
 import zipfile
-from pathlib import Path, PurePosixPath
+from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
 
 from adapters.common import MASTER_CODE_DIR
 
 
-PACKAGE_DIR = MASTER_CODE_DIR / "autoprice_v4_1_3"
-RUNNER = PACKAGE_DIR / "run_all_v4_1_3.py"
-AUTOPRICE_VERSION = "4.1.3"
+MASTER_SOURCE = MASTER_CODE_DIR / "Auto_Pricing.py"
+ACTION_NAMES = ("View", "Hold", "Offer", "Wishlist", "Cart", "Media")
 
 
-def _validate_zip_bytes(payload: bytes, label: str) -> None:
-    """Reject malformed/path-traversal ZIPs before the supplied runner extracts them."""
-    try:
-        with zipfile.ZipFile(io.BytesIO(payload)) as zf:
-            members = zf.infolist()
-            if not members:
-                raise ValueError(f"{label} is empty.")
-            for info in members:
-                path = PurePosixPath(info.filename.replace("\\", "/"))
-                if path.is_absolute() or ".." in path.parts:
-                    raise ValueError(f"{label} contains an unsafe path: {info.filename}")
-    except zipfile.BadZipFile as exc:
-        raise ValueError(f"{label} is not a valid ZIP file.") from exc
+def _runtime_namespace(output_main: Path, output_verify: Path) -> dict[str, object]:
+    """Load the preserved source with only its two desktop output paths redirected."""
+    source = MASTER_SOURCE.read_text(encoding="utf-8")
+    source = source.split("# --- Execution ---", 1)[0]
 
+    replacements = [
+        (
+            r"(?m)^\s*df_upgraded\.to_excel\([^\n]+index=False\)\s*$",
+            f"    df_upgraded.to_excel({str(output_main)!r}, index=False)",
+        ),
+        (
+            r"(?m)^\s*df_verify\.to_excel\([^\n]+index=False\)\s*$",
+            f"    df_verify.to_excel({str(output_verify)!r}, index=False)",
+        ),
+    ]
+    for pattern, replacement in replacements:
+        source, count = re.subn(pattern, replacement, source, count=1)
+        if count != 1:
+            raise RuntimeError("Auto Pricing source changed: output redirect point was not found exactly once.")
 
-def _write_optional(path: Path, payload: bytes | None) -> str | None:
-    if payload is None:
-        return None
-    path.write_bytes(payload)
-    return str(path)
+    namespace: dict[str, object] = {
+        "__name__": "matching_mapper_auto_pricing_runtime",
+        "__file__": str(MASTER_SOURCE),
+    }
+    exec(compile(source, str(MASTER_SOURCE), "exec"), namespace, namespace)
+    if not callable(namespace.get("process_stock_upgrade")):
+        raise RuntimeError("Auto Pricing source does not expose process_stock_upgrade().")
+    return namespace
 
 
 def run_auto_pricing(
     *,
-    raw_zip_bytes: bytes,
-    previous_final_zip_bytes: bytes,
-    template_bytes: bytes,
-    remove_party_bytes: bytes | None = None,
-    sales_120_history_bytes: bytes | None = None,
-    sales_180_history_bytes: bytes | None = None,
+    stock_bytes: bytes,
+    sales_180_bytes: bytes,
+    sales_120_bytes: bytes,
+    action_files: dict[str, bytes | None],
 ) -> tuple[bytes, str, str]:
-    """Run the supplied Dataset Finalizer + Auto Pricing v4.1.3 end-to-end flow."""
-    _validate_zip_bytes(raw_zip_bytes, "Raw ZIP")
-    _validate_zip_bytes(previous_final_zip_bytes, "Previous finalized-base ZIP")
-
-    if not RUNNER.is_file():
-        raise RuntimeError(f"Auto Pricing v{AUTOPRICE_VERSION} runner is missing: {RUNNER}")
-
-    with tempfile.TemporaryDirectory(prefix="matching_mapper_autoprice_v4_1_3_") as tmp:
+    """Run the preserved Auto Pricing source and return its two XLSX outputs in one ZIP."""
+    with tempfile.TemporaryDirectory(prefix="matching_mapper_auto_pricing_") as tmp:
         work = Path(tmp)
-        raw_zip = work / "Raw.zip"
-        input_zip = work / "Input latest.zip"
-        template = work / "Latest Auto pricing.xlsx"
-        output_dir = work / "output"
+        stock_path = work / "Stock file.xlsx"
+        sales_180_path = work / "sales_180_file.xlsx"
+        sales_120_path = work / "sales_120_file.xlsx"
+        stock_path.write_bytes(stock_bytes)
+        sales_180_path.write_bytes(sales_180_bytes)
+        sales_120_path.write_bytes(sales_120_bytes)
 
-        raw_zip.write_bytes(raw_zip_bytes)
-        input_zip.write_bytes(previous_final_zip_bytes)
-        template.write_bytes(template_bytes)
+        action_paths: dict[str, str] = {}
+        for action_name in ACTION_NAMES:
+            payload = action_files.get(action_name)
+            path = work / f"{action_name}.xlsx"
+            if payload is not None:
+                path.write_bytes(payload)
+            # Keep all six action keys, as in the supplied execution block. A missing
+            # upload intentionally points to a non-existent file; the preserved source
+            # catches that read error after already creating the action count columns.
+            action_paths[action_name] = str(path)
 
-        remove_party = _write_optional(work / "Remove party.xlsx", remove_party_bytes)
-        sales_120 = _write_optional(work / "sales_120_file_input.xlsx", sales_120_history_bytes)
-        sales_180 = _write_optional(work / "sales_180_file_input.xlsx", sales_180_history_bytes)
+        output_main = work / "Auto pricing revision.xlsx"
+        output_verify = work / "Cross_Verify_Sales_Actions.xlsx"
+        namespace = _runtime_namespace(output_main, output_verify)
 
-        command = [
-            sys.executable,
-            str(RUNNER),
-            "--raw-zip",
-            str(raw_zip),
-            "--input-zip",
-            str(input_zip),
-            "--template",
-            str(template),
-            "--output-dir",
-            str(output_dir),
-        ]
-        if remove_party:
-            command.extend(["--remove-party", remove_party])
-        if sales_120:
-            command.extend(["--sales-120-history", sales_120])
-        if sales_180:
-            command.extend(["--sales-180-history", sales_180])
-
-        completed = subprocess.run(
-            command,
-            cwd=str(PACKAGE_DIR),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            check=False,
-        )
-        logs = completed.stdout or ""
-        if completed.returncode != 0:
-            raise RuntimeError(
-                f"Auto Pricing v{AUTOPRICE_VERSION} failed with exit code {completed.returncode}.\n"
-                + logs[-12000:]
+        captured = io.StringIO()
+        with redirect_stdout(captured), redirect_stderr(captured):
+            namespace["process_stock_upgrade"](
+                str(stock_path),
+                str(sales_180_path),
+                str(sales_120_path),
+                action_paths,
             )
 
-        final_books = sorted(output_dir.glob("Auto_pricing_FINAL_*_v4_1_3.xlsx"))
-        base_zips = sorted(output_dir.glob("Final_Base_Output_*_v4_1_3.zip"))
-        audit = output_dir / "Processing_Audit.xlsx"
-        report = output_dir / "processing_report.json"
-
-        missing = []
-        if len(final_books) != 1:
-            missing.append("final Auto Pricing workbook")
-        if len(base_zips) != 1:
-            missing.append("final base-output ZIP")
-        if not audit.is_file():
-            missing.append("Processing_Audit.xlsx")
-        if not report.is_file():
-            missing.append("processing_report.json")
-        if missing:
+        if not output_main.is_file() or not output_verify.is_file():
             raise RuntimeError(
-                "Auto Pricing completed without all expected v4.1.3 outputs: "
-                + ", ".join(missing)
-                + "\n"
-                + logs[-12000:]
+                "Auto Pricing completed without creating both expected workbooks.\n"
+                + captured.getvalue()[-6000:]
             )
 
-        output_zip = work / "Auto_Pricing_v4_1_3_Output.zip"
+        output_zip = work / "Auto_Pricing_Output.zip"
         with zipfile.ZipFile(output_zip, "w", zipfile.ZIP_DEFLATED) as zf:
-            zf.write(final_books[0], arcname=final_books[0].name)
-            zf.write(base_zips[0], arcname=base_zips[0].name)
-            zf.write(audit, arcname=audit.name)
-            zf.write(report, arcname=report.name)
+            zf.write(output_main, arcname=output_main.name)
+            zf.write(output_verify, arcname=output_verify.name)
 
-        return output_zip.read_bytes(), output_zip.name, logs
+        return output_zip.read_bytes(), output_zip.name, captured.getvalue()

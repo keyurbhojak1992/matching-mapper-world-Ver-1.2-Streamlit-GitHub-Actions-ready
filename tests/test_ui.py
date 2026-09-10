@@ -93,3 +93,19 @@ def test_deployment_exposes_version_markers():
     assert "Application version" in app_text
     assert '"worker_version": WORKER_VERSION' in worker_text
     assert "Verify deployed project version" in workflow_text
+
+
+def test_auto_pricing_full_pipeline_ui_is_exposed():
+    root = Path(__file__).resolve().parents[1]
+    text = (root / "app.py").read_text(encoding="utf-8")
+    assert "Full Pipeline — RAW to Final" in text
+    assert "RAW export ZIP *" in text
+    assert "Previous finalized base ZIP *" in text
+    assert "Using Git default: data/remove_parties.xlsx" in text
+    assert "Run Full Auto Pricing Pipeline" in text
+
+
+def test_auto_pricing_removed_parties_git_default_exists():
+    root = Path(__file__).resolve().parents[1]
+    assert (root / "data" / "remove_parties.xlsx").is_file()
+    assert (root / "processors" / "auto_pricing_finalizer_v4_1_3" / "process_datasets_v4_1_3.py").is_file()

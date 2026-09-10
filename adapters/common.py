@@ -23,6 +23,7 @@ DEFAULT_DATA_FILES = {
     "profile_temp": "PARTY_PROFILE_TEMP.parquet",
     "filters": "filters - EBID.xlsx",
     "no_need": "no_need.xlsx",
+    "auto_pricing_remove_parties": "remove_parties.xlsx",
 }
 
 
