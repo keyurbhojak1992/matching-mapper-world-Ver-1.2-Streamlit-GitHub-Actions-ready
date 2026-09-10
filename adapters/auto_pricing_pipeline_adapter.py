@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 
 from adapters.common import ROOT_DIR, repository_data_path, safe_filename
 
@@ -54,6 +54,60 @@ HISTORY_UPLOAD_NAMES = {
 REQUIRED_RAW_UPLOADS = {"Stock", "Sales"}
 REQUIRED_HISTORY_UPLOADS = {"Sales 120", "Sales 180"}
 OPTIONAL_ACTION_UPLOADS = {"Cart", "Hold", "Offer", "View", "Wishlist"}
+
+
+
+class AutoPricingDataError(RuntimeError):
+    """User-facing data preparation error with an optional processing-check workbook."""
+
+    def __init__(self, message: str, *, audit_bytes: bytes | None = None, report: dict | None = None):
+        super().__init__(message)
+        self.audit_bytes = audit_bytes
+        self.report = report or {}
+
+
+def _sheet_to_single_workbook_bytes(payload: bytes, sheet_name: str) -> bytes:
+    """Copy one worksheet by values into a simple standalone workbook."""
+    src = load_workbook(io.BytesIO(payload), read_only=True, data_only=False)
+    if sheet_name not in src.sheetnames:
+        raise ValueError(f"Sheet {sheet_name!r} was not found.")
+    src_ws = src[sheet_name]
+    out = io.BytesIO()
+    wb = Workbook(write_only=True)
+    ws = wb.create_sheet("Sheet1")
+    for row in src_ws.iter_rows(values_only=True):
+        ws.append(list(row))
+    wb.save(out)
+    return out.getvalue()
+
+
+def _first_sheet_headers(payload: bytes) -> set[str]:
+    wb = load_workbook(io.BytesIO(payload), read_only=True, data_only=True)
+    ws = wb[wb.sheetnames[0]]
+    row = next(ws.iter_rows(min_row=1, max_row=1, values_only=True), ())
+    return {str(v).strip().casefold() for v in row if v not in (None, "")}
+
+
+def _prepare_previous_sales_file(kind: str, payload: bytes | None) -> bytes | None:
+    """Accept either a dedicated Sales base file or the previous combined Auto Pricing workbook."""
+    if not payload:
+        return payload
+    try:
+        headers = _first_sheet_headers(payload)
+        # Dedicated Sales base files already expose these on the first sheet.
+        if "serial no" in headers and "sale date" in headers:
+            return payload
+        wb = load_workbook(io.BytesIO(payload), read_only=True, data_only=True)
+        wanted = "Avg_Rate" if kind == "Sales 120" else "Sale_segment"
+        if wanted in wb.sheetnames:
+            return _sheet_to_single_workbook_bytes(payload, wanted)
+    except Exception as exc:
+        raise ValueError(f"The selected {kind} file could not be read. Please choose the matching previous Sales file.") from exc
+    raise ValueError(
+        f"The selected {kind} file does not contain the expected Sales data. "
+        f"Choose the matching previous Sales file, or a previous Auto Pricing workbook containing "
+        f"{'Avg_Rate' if kind == 'Sales 120' else 'Sale_segment'}."
+    )
 
 ACTION_HEADERS = {
     "Cart": ["CREATED_DATETIME", "Sold Party", "Party_type", "Country", "City", "SALE_PERSON", "Serial No", "Shp", "Carat", "Col", "Qua", "Flo", "Lab", "Cut", "Pol", "Sym", "Shade", "Milky", "TBINC_NAME", "TOIN_NAME", "SBINC_NAME", "SOIN_NAME", "GIRDLE_OPEN_NAME", "PAV_OPEN_NAME", "Ratio", "Disc%", "RAP", "RATE", "AMT"],
@@ -167,8 +221,11 @@ def run_auto_pricing_full_pipeline_from_files(
         required_keys=REQUIRED_RAW_UPLOADS,
         optional_headers=ACTION_HEADERS,
     )
+    prepared_previous = dict(previous_base_files)
+    prepared_previous["Sales 120"] = _prepare_previous_sales_file("Sales 120", prepared_previous.get("Sales 120"))
+    prepared_previous["Sales 180"] = _prepare_previous_sales_file("Sales 180", prepared_previous.get("Sales 180"))
     previous_zip = _named_xlsx_zip(
-        previous_base_files,
+        prepared_previous,
         HISTORY_UPLOAD_NAMES,
         "Previous files",
         required_keys=REQUIRED_HISTORY_UPLOADS,
@@ -244,8 +301,29 @@ def run_auto_pricing_full_pipeline(
             raise RuntimeError("Processor completed without creating processing_report.json.")
         report = json.loads(report_path.read_text(encoding="utf-8"))
         if not report.get("all_datasets_ok"):
-            raise RuntimeError(
-                "One or more base datasets failed validation. Review Processing_Audit.xlsx."
+            failed = [
+                str(row.get("Dataset"))
+                for row in (report.get("summary") or [])
+                if str(row.get("Status", "")).upper() != "PASS"
+            ]
+            errors = [
+                row for row in (report.get("issues") or [])
+                if str(row.get("Severity", "")).upper() == "ERROR"
+            ]
+            parts = []
+            if failed:
+                parts.append("Could not prepare: " + ", ".join(dict.fromkeys(failed)))
+            for row in errors[:3]:
+                ds = str(row.get("Dataset") or "File")
+                issue = str(row.get("Issue Type") or row.get("Details") or "needs attention")
+                col = str(row.get("Column") or "").strip()
+                parts.append(f"{ds}: {issue}" + (f" ({col})" if col else ""))
+            message = ". ".join(parts) or "One or more selected files need attention."
+            audit_path = output_dir / "Processing_Audit.xlsx"
+            raise AutoPricingDataError(
+                message,
+                audit_bytes=audit_path.read_bytes() if audit_path.is_file() else None,
+                report=report,
             )
 
         processing_date = str(report.get("processing_date") or "current")

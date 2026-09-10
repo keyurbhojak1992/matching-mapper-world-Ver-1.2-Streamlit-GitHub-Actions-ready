@@ -12,6 +12,7 @@ import streamlit as st
 
 from adapters.auto_pricing_adapter import ACTION_NAMES as AUTO_PRICING_ACTION_NAMES, run_auto_pricing
 from adapters.auto_pricing_pipeline_adapter import (
+    AutoPricingDataError,
     default_remove_party_bytes,
     run_auto_pricing_full_pipeline_from_files,
 )
@@ -1141,6 +1142,28 @@ def auto_pricing_page() -> None:
                     )
                     _save_result("auto_pricing_full_result", data, filename, logs)
                 st.rerun()
+            except AutoPricingDataError as exc:
+                _show_user_error("Unable to complete Auto Pricing", exc)
+                rows = []
+                for row in (exc.report.get("summary") or []):
+                    status = str(row.get("Status", ""))
+                    if status.upper() != "PASS":
+                        rows.append({
+                            "Data": row.get("Dataset", ""),
+                            "Result": "Needs attention",
+                            "File": row.get("Raw File", "") or row.get("Previous Final File", ""),
+                        })
+                if rows:
+                    st.dataframe(rows, hide_index=True, use_container_width=True)
+                if exc.audit_bytes:
+                    st.download_button(
+                        "Download processing check",
+                        data=exc.audit_bytes,
+                        file_name="Processing_Check.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True,
+                        key="download_auto_pricing_failed_check",
+                    )
             except Exception as exc:
                 _show_user_error("Unable to complete Auto Pricing", exc)
 
@@ -1215,7 +1238,7 @@ def auto_pricing_page() -> None:
 - Blank Lab or Flo values become `NON`.
 - Parties in the saved removal list are excluded automatically.
 - `SALE_PERSON` is kept as it is and is not used to decide whether a row should be replaced.
-- Repeated activity rows are kept for now unless they are removed in a separately approved duplicate-cleaning step.
+- Fully identical duplicate rows are removed automatically. Repeated activity is kept when any field is different.
                 """
             )
 

@@ -322,7 +322,7 @@ def build_workbook(base_dir: Path, out_path: Path, base_zip: Path | None = None)
     swb.close()
     counts['Hold'] = n
 
-    for sheet in ['Wishlist', 'Offer', 'Cart']:
+    def write_simple_action_sheet(sheet):
         ws, target = setup(sheet)
         swb, it, _, ix = read_xlsx_rows(base_dir / f'{sheet}.xlsx')
         n = 0
@@ -338,6 +338,9 @@ def build_workbook(base_dir: Path, out_path: Path, base_zip: Path | None = None)
         swb.close()
         counts[sheet] = n
 
+    # Keep the familiar workbook order: Wishlist, View, Offer, Cart.
+    write_simple_action_sheet('Wishlist')
+
     ws, target = setup('View')
     swb, it, _, ix = read_xlsx_rows(base_dir / 'View.xlsx')
     n = 0
@@ -349,6 +352,9 @@ def build_workbook(base_dir: Path, out_path: Path, base_zip: Path | None = None)
         n += 1
     swb.close()
     counts['View'] = n
+
+    write_simple_action_sheet('Offer')
+    write_simple_action_sheet('Cart')
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(out_path)

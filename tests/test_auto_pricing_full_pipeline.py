@@ -141,3 +141,19 @@ def test_auto_pricing_builder_tolerates_trailing_blank_action_cells(tmp_path):
     assert sale_count
     assert buyers
     assert dict(action_parties) == {}
+
+
+def test_exact_output_duplicate_cleaning_keeps_nonidentical_activity():
+    from datetime import datetime
+    from processors.auto_pricing_finalizer_v4_1_3.process_datasets_v4_1_3 import remove_exact_output_duplicates
+
+    headers = ["SERIAL_NO", "JANGAD_DATE", "PARTY_CODE", "Sold Party"]
+    base = {"SERIAL_NO": "412429", "JANGAD_DATE": datetime(2026, 8, 21, 0, 7, 11), "PARTY_CODE": "P1", "Sold Party": "BUYER A"}
+    same = dict(base)
+    different = dict(base)
+    different["PARTY_CODE"] = "P2"
+    kept, removed = remove_exact_output_duplicates([base, same, different], headers)
+    assert removed == 1
+    assert len(kept) == 2
+    assert kept[0]["PARTY_CODE"] == "P1"
+    assert kept[1]["PARTY_CODE"] == "P2"

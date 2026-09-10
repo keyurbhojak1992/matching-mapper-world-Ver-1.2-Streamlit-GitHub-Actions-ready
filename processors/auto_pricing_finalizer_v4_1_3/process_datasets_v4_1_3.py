@@ -15,7 +15,7 @@ import os
 from difflib import SequenceMatcher
 from openpyxl.styles.numbers import is_date_format
 
-VERSION = '4.1.3'
+VERSION = '4.1.4'
 RAW_DIR = Path(os.environ.get('RAW_DATA_DIR', '/mnt/data/raw_inputs'))
 FINAL_DIR = Path(os.environ.get('FINAL_HISTORY_DIR', '/mnt/data/final_samples'))
 OUT_DIR = Path(os.environ.get('OUTPUT_DIR', '/mnt/data/output_final'))
@@ -794,6 +794,37 @@ def read_history(dataset, history_path: Path, headers, date_col, audit):
     return records, invalid, blacklist_removed
 
 
+def _exact_output_signature(rec: dict, headers: list[str]):
+    """Signature for true output-row identity. Internal/source metadata is excluded."""
+    vals = []
+    for h in headers:
+        v = rec.get(h)
+        if is_blank(v):
+            vals.append(('blank', ''))
+        elif isinstance(v, datetime):
+            vals.append(('datetime', v.isoformat()))
+        elif isinstance(v, date):
+            vals.append(('date', v.isoformat()))
+        else:
+            vals.append((type(v).__name__, str(v)))
+    return tuple(vals)
+
+
+def remove_exact_output_duplicates(records: list[dict], headers: list[str]):
+    """Remove only rows whose complete output values are identical; preserve first occurrence/order."""
+    seen = set()
+    kept = []
+    removed = 0
+    for rec in records:
+        sig = _exact_output_signature(rec, headers)
+        if sig in seen:
+            removed += 1
+            continue
+        seen.add(sig)
+        kept.append(rec)
+    return kept, removed
+
+
 def process_history_log(dataset: str, raw_path: Path, history_path: Path, out_name: str, date_col: str,
                         days: int, hold_mode=False, audit=None):
     """History + RAW processor with authoritative whole-boundary-date refresh.
@@ -899,27 +930,12 @@ def process_history_log(dataset: str, raw_path: Path, history_path: Path, out_na
         else: filtered.append(rec)
     filtered.sort(key=lambda r: (r[date_col], r.get('_source_row', 0)))
 
-    # Audit duplicates only; do not remove them in v4.1.3.
-    sig_cols = [h for h in headers if h not in DERIVED_COLUMNS]
-    sig = lambda rec: tuple(str(rec.get(h)) for h in sig_cols)
-    counts = Counter(sig(rec) for rec in filtered)
-    dups = sum(c - 1 for c in counts.values() if c > 1)
-    new_dups = ''
-    if dataset == 'Hold':
-        hist_in_window = [r for r in carried_history if cutoff <= r[date_col].date() <= anchor]
-        app_in_window = [r for r in appended if cutoff <= r[date_col].date() <= anchor]
-        hc = Counter(sig(r) for r in hist_in_window)
-        ac = Counter(sig(r) for r in app_in_window)
-        new_dups = sum(max(hc[k] + ac[k] - 1, 0) - max(hc[k] - 1, 0) for k in set(hc) | set(ac))
-        if new_dups:
-            add_issue(audit, dataset, 'WARNING', 'New duplicate-looking occurrences this run',
-                      details=f'{new_dups} duplicate-looking occurrence(s) were introduced by newly appended/refreshed RAW rows. Rows are kept; no deduplication is applied.')
-        if dups:
-            add_issue(audit, dataset, 'INFO', 'Total duplicate-looking occurrences in final',
-                      details=f'{dups} total duplicate-looking occurrence(s) exist in the final Hold window, including historical occurrences. Rows are kept.')
-    elif dups:
-        add_issue(audit, dataset, 'WARNING', 'Potential duplicate-looking rows kept',
-                  details=f'{dups} repeated occurrence(s) kept. Exact row deduplication is deferred.')
+    # Remove only true full-row duplicates after merge/window filtering.
+    # Similar-looking activity with any differing output field is preserved.
+    filtered, exact_duplicates_removed = remove_exact_output_duplicates(filtered, headers)
+    if exact_duplicates_removed:
+        add_issue(audit, dataset, 'INFO', 'Exact duplicate rows removed',
+                  details=f'{exact_duplicates_removed} fully identical output row(s) were removed; the first occurrence was retained.')
 
     write_standard_output(out_name, headers, filtered)
     audit_blanks(audit, dataset, headers, filtered)
@@ -934,9 +950,9 @@ def process_history_log(dataset: str, raw_path: Path, history_path: Path, out_na
         'Raw New Rows Appended': len(appended), 'Raw Historical/Overlap Rows Skipped': raw_old_overlap,
         'Boundary History Rows Replaced': boundary_history_removed,
         'Blacklist Removed From Raw': blacklist_removed, 'Before Cutoff': before, 'After Anchor': after,
-        'Output Rows': len(filtered), 'Potential Duplicates Kept': dups,
-        'New Duplicate-Looking Occurrences This Run': new_dups if dataset == 'Hold' else '',
-        'Total Duplicate-Looking Occurrences In Final': dups if dataset == 'Hold' else '', 'Status': status
+        'Output Rows': len(filtered), 'Exact Duplicate Rows Removed': exact_duplicates_removed, 'Potential Duplicates Kept': 0,
+        'New Duplicate-Looking Occurrences This Run': '',
+        'Total Duplicate-Looking Occurrences In Final': '', 'Status': status
     }
     audit['summary'].append(summary)
     return summary, status == 'PASS'
@@ -1030,10 +1046,16 @@ def process_view(raw_path: Path, history_path: Path, out_name='View.xlsx', audit
         else: filtered.append(rec)
     filtered.sort(key=lambda r: (r['CREATED_DATETIME'], r.get('_source_row', 0), str(r.get('SERIAL_NO') or '')))
 
+    filtered, exact_duplicates_removed = remove_exact_output_duplicates(filtered, headers)
+    if exact_duplicates_removed:
+        add_issue(audit, dataset, 'INFO', 'Exact duplicate rows removed',
+                  details=f'{exact_duplicates_removed} fully identical View row(s) were removed; the first occurrence was retained.')
+
     keys = Counter((str(r.get('SEQ_NO')), str(r.get('SERIAL_NO')), str(r.get('CREATED_DATETIME'))) for r in filtered)
     dups = sum(c - 1 for c in keys.values() if c > 1)
     if dups:
-        add_issue(audit, dataset, 'WARNING', 'Potential View duplicates kept', details=f'{dups} repeated SEQ_NO + SERIAL_NO + CREATED_DATETIME occurrence(s) kept. Exact row deduplication is deferred to the later deduplication step.')
+        add_issue(audit, dataset, 'INFO', 'Repeated View activity retained',
+                  details=f'{dups} repeated SEQ_NO + SERIAL_NO + CREATED_DATETIME occurrence(s) remain because another output field differs; these are not exact duplicate rows.')
 
     write_standard_output(out_name, headers, filtered)
     audit_blanks(audit, dataset, headers, filtered)
@@ -1041,14 +1063,14 @@ def process_view(raw_path: Path, history_path: Path, out_name='View.xlsx', audit
     summary = {
         'Dataset': dataset, 'Output File': out_name, 'Raw File': source_label(raw_path), 'Previous Final File': history_path.name,
         'Source Rule': 'Previous final preserved before latest-history date; boundary date refreshed from RAW when present; later RAW rows appended; STONE_ID kept as one SERIAL_NO value',
-        'Window Rule': '90-day window from processing date; blank/0 SERIAL_NO removed; no STONE_ID split; exact row deduplication deferred',
+        'Window Rule': '90-day window from processing date; blank/0 SERIAL_NO removed; no STONE_ID split; exact full-row duplicates removed',
         'Date Field': 'CREATED_DATETIME', 'Processing Date': today.isoformat(), 'Anchor Date': anchor.isoformat(), 'Cutoff Date': cutoff.isoformat(),
         'History Rows': len(history), 'History Invalid Dates': history_invalid, 'History Blacklist Removed': history_blacklist, 'Latest History Timestamp': history_max,
         'Raw Rows Read': raw_rows, 'Raw Valid Dates': len(valid_raw), 'Raw Invalid Dates': raw_invalid,
         'Raw New Rows Appended': len(appended), 'Raw Historical/Overlap Rows Skipped': raw_old,
         'Boundary History Rows Replaced': boundary_history_removed,
         'Blacklist Removed From Raw': blacklist_removed, 'Blank/Zero Stone Removed': blank_zero,
-        'Before Cutoff': before, 'After Anchor': after, 'Output Rows': len(filtered), 'Potential Duplicates Kept': dups, 'Status': status
+        'Before Cutoff': before, 'After Anchor': after, 'Output Rows': len(filtered), 'Exact Duplicate Rows Removed': exact_duplicates_removed, 'Potential Duplicates Kept': dups, 'Status': status
     }
     audit['summary'].append(summary)
     return summary, status == 'PASS'
@@ -1231,7 +1253,7 @@ def process_sales(raw_path: Path, final120: Path, final180: Path, audit=None):
     raw_duplicate_occurrences = sum(c - 1 for c in raw_key_counts.values() if c > 1)
     if raw_duplicate_occurrences:
         add_issue(audit, dataset, 'WARNING', 'Repeated Sale key in raw kept', source_label(raw_path),
-                  details=f'{raw_duplicate_occurrences} repeated Serial No + Sale Date occurrence(s) exist in raw. They are kept; no raw deduplication is applied.')
+                  details=f'{raw_duplicate_occurrences} repeated Serial No + Sale Date occurrence(s) exist in raw. Final exact full-row duplicates are removed after merge; non-identical repeated sale keys are retained.')
 
     # Invalid raw dates or lost mapped values are fatal because silently excluding them can corrupt the final window.
     if invalid or mapping_losses:
@@ -1320,12 +1342,16 @@ def process_sales(raw_path: Path, final120: Path, final180: Path, audit=None):
             except Exception: carat = -1
             return (-carat, r['Sale Date'], r.get('_source_row', 0))
         final_records.sort(key=sk)
+        final_records, exact_duplicates_removed = remove_exact_output_duplicates(final_records, headers)
+        if exact_duplicates_removed:
+            add_issue(audit, sales_dataset, 'INFO', 'Exact duplicate rows removed',
+                      details=f'{exact_duplicates_removed} fully identical Sales row(s) were removed; the first occurrence was retained.')
 
         final_key_counts = Counter(sale_key(r) for r in final_records)
         final_duplicate_occurrences = sum(c - 1 for c in final_key_counts.values() if c > 1)
         if final_duplicate_occurrences:
             add_issue(audit, sales_dataset, 'WARNING', 'Repeated Sale key kept in final',
-                      details=f'{final_duplicate_occurrences} repeated Serial No + Sale Date occurrence(s) remain. No deduplication is applied.')
+                      details=f'{final_duplicate_occurrences} repeated Serial No + Sale Date occurrence(s) remain because their complete output rows differ; they are retained.')
 
         # Coverage safeguard: if neither history nor raw reaches the cutoff, the requested window may be incomplete.
         earliest_available = min([x for x in [history_min, raw_min] if x is not None], default=None)
@@ -1342,7 +1368,7 @@ def process_sales(raw_path: Path, final120: Path, final180: Path, audit=None):
             'Output File': out_name,
             'Raw File': source_label(raw_path),
             'Previous Final File': history_path.name,
-            'Source Rule': 'Previous Sales input remains the descriptive base. Current RAW updates SPer/SRate on exact Serial No + Sale Date overlaps; new RAW transactions are appended. Exact row deduplication is deferred.',
+            'Source Rule': 'Previous Sales input remains the descriptive base. Current RAW updates SPer/SRate on exact Serial No + Sale Date overlaps; new RAW transactions are appended. Exact full-row duplicates are removed.',
             'Window Rule': f'{days}-day window; anchor=today when current-day log exists, otherwise yesterday',
             'Date Field': 'Sale Date',
             'Processing Date': today.isoformat(),
@@ -1366,6 +1392,7 @@ def process_sales(raw_path: Path, final120: Path, final180: Path, audit=None):
             'Before Cutoff': hist_before + raw_before,
             'After Anchor': hist_after + raw_after,
             'Output Rows': len(final_records),
+            'Exact Duplicate Rows Removed': exact_duplicates_removed,
             'Potential Duplicates Kept': final_duplicate_occurrences,
             'Status': 'PASS'
         }
@@ -1413,6 +1440,10 @@ def process_stock(raw_path: Path, out_name='Stock file.xlsx', audit=None):
         except Exception: carat = -1
         return (-carat, r.get('_source_row', 0))
     records.sort(key=sk)
+    records, exact_duplicates_removed = remove_exact_output_duplicates(records, headers)
+    if exact_duplicates_removed:
+        add_issue(audit, dataset, 'INFO', 'Exact duplicate rows removed', source_label(raw_path),
+                  details=f'{exact_duplicates_removed} fully identical Stock row(s) were removed; the first occurrence was retained.')
     serial_counts = Counter(str(r.get('Serial No')) for r in records if not is_blank(r.get('Serial No')))
     dups = sum(c - 1 for c in serial_counts.values() if c > 1)
     if dups:
@@ -1429,7 +1460,7 @@ def process_stock(raw_path: Path, out_name='Stock file.xlsx', audit=None):
         'Raw Rows Read': raw_rows, 'Raw Valid Dates': '', 'Raw Invalid Dates': 0, 'Raw New Rows Appended': 'All valid raw rows are source',
         'Raw Historical/Overlap Rows Skipped': 0, 'Blacklist Removed From Raw': 0, 'Stock Non-Data Rows Removed': nondata_rows_removed,
         'Before Cutoff': 0, 'After Anchor': 0,
-        'Output Rows': len(records), 'Potential Duplicates Kept': dups, 'Status': status
+        'Output Rows': len(records), 'Exact Duplicate Rows Removed': exact_duplicates_removed, 'Potential Duplicates Kept': dups, 'Status': status
     }
     audit['summary'].append(summary)
     return summary, status == 'PASS'
@@ -1517,7 +1548,7 @@ def main():
     view_raw = locate([r'APPOINTMENT', r'View'], RAW_DIR)
     wishlist_raw = locate([r'WISHLIST', r'Wish'], RAW_DIR)
     sales_raw = locate_sales(RAW_DIR)
-    stock_raw = locate([r'^Stock$', r'^KSTAKA', r'^KSSTAKA'], RAW_DIR)
+    stock_raw = locate([r'^Stock$', r'^KSTAKA', r'^KSSTAKA', r'^KSATAKA'], RAW_DIR)
 
     _, ok = process_history_log('Cart', cart_raw, final_path('Cart.xlsx'), 'Cart.xlsx', 'CREATED_DATETIME', ACTIVITY_DAYS, audit=audit); ok_flags.append(ok)
     _, ok = process_history_log('Hold', hold_raw, final_path('Hold.xlsx'), 'Hold.xlsx', 'JANGAD_DATE', HOLD_DAYS, hold_mode=True, audit=audit); ok_flags.append(ok)
@@ -1533,11 +1564,12 @@ def main():
         'rules': {
             'Processing Date': 'Production uses actual current date in Asia/Kolkata. TEST_PROCESSING_DATE is accepted only for regression/testing.',
             'Legacy Date Column': 'Obsolete final helper column Date is ignored/removed; it is not required from RAW and is not used for date-window logic',
-            'Cart/Offer/Wishlist': 'Previous final preserved before its last calendar date; if RAW contains that date, replace the entire boundary date from RAW; otherwise append after latest timestamp; 90-day window; exact-row dedup deferred',
-            'View': 'Previous final preserved before boundary date; boundary date refreshed from RAW; STONE_ID kept as one SERIAL_NO value; blank/0 removed; processing-date 90-day window; exact-row dedup deferred',
-            'Hold': 'Same whole-boundary-date refresh rule; SERIAL_NO comes from RAW SERIAL_NO; 90-day window from processing date; exact-row dedup deferred',
+            'Cart/Offer/Wishlist': 'Previous final preserved before its last calendar date; if RAW contains that date, replace the entire boundary date from RAW; otherwise append after latest timestamp; 90-day window; exact full-row duplicates removed',
+            'View': 'Previous final preserved before boundary date; boundary date refreshed from RAW; STONE_ID kept as one SERIAL_NO value; blank/0 removed; processing-date 90-day window; exact full-row duplicates removed',
+            'Hold': 'Same whole-boundary-date refresh rule; SERIAL_NO comes from RAW SERIAL_NO; 90-day window from processing date; exact full-row duplicates removed',
             'Sales': 'Sales 120/180 input files carry descriptive history. Current RAW updates SPer/SRate on exact Serial No + Sale Date overlaps and appends new transactions. Blank Lab/Flo become NON.',
-            'Stock': 'RAW Stock only; no previous Stock file required; canonical output headers are built into the processor; no deduplication',
+            'Stock': 'RAW Stock only; no previous Stock file required; canonical output headers are built into the processor; exact full-row duplicates are removed',
+            'Duplicate Cleaning': 'Only fully identical output rows are removed after merge/window processing. Similar or repeated activity with any differing field is retained.',
             'Derived Fields': 'Sales Carat_Grp/Amt and Stock Carat_Grp/Tag are computed in Python and written as values; blank Lab/Flo become NON; downstream logic does not depend on Excel cached formulas.',
         },
         'summary': audit['summary'], 'issue_counts': dict(Counter(x['Severity'] for x in audit['issues'])),
