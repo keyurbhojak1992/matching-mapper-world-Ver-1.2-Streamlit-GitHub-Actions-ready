@@ -1,22 +1,51 @@
 from __future__ import annotations
 
-from openpyxl import load_workbook, Workbook
-from openpyxl.cell import WriteOnlyCell
-from openpyxl.styles import NamedStyle
-from pathlib import Path
-from datetime import datetime, date
+import argparse
+import math
+import re
+import zipfile
 from collections import defaultdict
-from copy import copy
-import argparse, gc, math, re, zipfile
+from datetime import date, datetime
+from pathlib import Path
 
-SHEETS = ['Sheet1','Sale_segment','Avg_Rate','Hold','Wishlist','View','Offer','Cart']
-BASE_FILES = ['Cart.xlsx','Hold.xlsx','Offer.xlsx','View.xlsx','Wishlist.xlsx','Stock file.xlsx','sales_120_file.xlsx','sales_180_file.xlsx']
+from openpyxl import Workbook, load_workbook
+from openpyxl.cell import WriteOnlyCell
+from openpyxl.styles import Alignment, Border, Font, NamedStyle, PatternFill, Side
+
+
+BASE_FILES = [
+    'Cart.xlsx', 'Hold.xlsx', 'Offer.xlsx', 'View.xlsx', 'Wishlist.xlsx',
+    'Stock file.xlsx', 'sales_120_file.xlsx', 'sales_180_file.xlsx'
+]
 SPACE_RE = re.compile(r' +')
+
+SHEET_HEADERS = {
+    'Sheet1': ['Serial No', 'Shp', 'Carat', 'Carat_Grp', 'Color name', 'Qua', 'Cut', 'Pol', 'Sym', 'Lab', 'Flo', 'GRap', 'GPer', 'Expected', 'Sold_Avg_Rate_120days', 'Diff', 'Remark', 'Tag', 'Unique_Buyer_Count', 'Sold_Party', 'sale_count', 'Action_count', 'ALL_Action_count'],
+    'Sale_segment': ['Serial No', 'Shp', 'Carat', 'Carat_Grp', 'Col', 'Qua', 'Cut', 'Pol', 'Sym', 'Lab', 'Flo', 'Sold Party', 'Sale Date', 'Date', 'Tag'],
+    'Avg_Rate': ['Serial No', 'Shp', 'Carat', 'Carat_Grp', 'Col', 'Qua', 'Cut', 'Pol', 'Sym', 'Lab', 'Flo', 'Sale Date', 'SPer', 'SRate', 'Amt', 'Date', 'Tag'],
+    'Hold': ['SERIAL_NO', 'JANGAD_DATE', 'Date', 'PARTY_CODE', 'Sold Party'],
+    'Wishlist': ['CREATED_DATETIME', 'Sold Party', 'Party_type', 'Country', 'City', 'SALE_PERSON', 'Serial No', 'Shp', 'Carat', 'Col', 'Qua', 'Flo', 'Lab', 'Cut', 'Pol', 'Sym', 'Shade', 'Milky', 'TBINC_NAME', 'TOIN_NAME', 'SBINC_NAME', 'SOIN_NAME', 'GIRDLE_OPEN_NAME', 'PAV_OPEN_NAME', 'Ratio'],
+    'View': ['SEQ_NO', 'APPOINTMENT_TYPE', 'APPOINTMENT_DATE', 'APPOINTMENT_TIME', 'PARTY_CODE', 'Sold Party', 'EMPLOYEE_NO', 'SERIAL_NO', 'SOURCE', 'STATUS', 'CREATED_BY', 'CREATED_DATETIME', 'CREATED_COMPUTER', 'MODIFIED_BY', 'MODIFIED_DATETIME', 'MODIFIED_COMPUTER', 'IS_REACHED', 'IS_CANCELED', 'NOTE', 'ASSIGN_TO', 'STOCK_REQUEST_TIME', 'APPOINTMENT_END_TIME', 'IS_DELETE', 'IS_LAYOUT', 'CABIN_ASSIGN_DATE', 'Date'],
+    'Offer': ['CREATED_DATETIME', 'Sold Party', 'Party_type', 'Country', 'City', 'SALE_PERSON', 'Serial No', 'Shp', 'Carat', 'Col', 'Qua', 'Flo', 'Lab', 'Cut', 'Pol', 'Sym', 'Shade', 'Milky', 'TBINC_NAME', 'TOIN_NAME', 'SBINC_NAME', 'SOIN_NAME', 'GIRDLE_OPEN_NAME', 'PAV_OPEN_NAME', 'Ratio'],
+    'Cart': ['CREATED_DATETIME', 'Sold Party', 'Party_type', 'Country', 'City', 'SALE_PERSON', 'Serial No', 'Shp', 'Carat', 'Col', 'Qua', 'Flo', 'Lab', 'Cut', 'Pol', 'Sym', 'Shade', 'Milky', 'TBINC_NAME', 'TOIN_NAME', 'SBINC_NAME', 'SOIN_NAME', 'GIRDLE_OPEN_NAME', 'PAV_OPEN_NAME', 'Ratio'],
+}
+
+SHEET_WIDTHS = {
+    'Sheet1': {'A':9,'B':6.3,'C':5.6,'D':9.9,'E':11.2,'F':5.6,'G':4.6,'H':3.9,'I':4.8,'J':5.3,'K':5.3,'L':6,'M':7.8,'N':10,'O':22.6,'P':7.8,'Q':8,'R':33.6,'S':20.3,'T':30.8,'U':10.6,'V':12.8,'W':16.9},
+    'Sale_segment': {'A':9.6,'B':5.9,'C':7,'D':10.3,'E':5,'F':5,'G':5,'H':5,'I':5,'J':5,'K':5,'L':44.9,'M':18,'N':15.6,'O':33.6},
+    'Avg_Rate': {'A':9.6,'B':5.9,'C':7,'D':10.3,'E':5,'F':5,'G':5,'H':5,'I':5,'J':5,'K':5,'L':18,'M':8,'N':10,'O':10.5,'P':15.6,'Q':33.2},
+    'Hold': {'A':10.8,'B':22,'C':10.5,'D':12.5,'E':57.3},
+    'Wishlist': {'A':19.2,'B':45.3,'C':10.6,'D':17,'E':13.5,'F':13.5,'G':9,'H':6.3,'I':6,'J':4.8,'K':5.6,'L':5.3,'M':6.3,'N':4,'O':3.9,'P':4.8,'Q':22.3,'R':12.5,'S':18.2,'T':14.2,'U':18.2,'V':14.2,'W':20.2,'X':17.6,'Y':5.6},
+    'Offer': {'A':19.2,'B':45.6,'C':10.6,'D':17,'E':15.8,'F':13.5,'G':9,'H':6.3,'I':6,'J':4.8,'K':5.6,'L':5.3,'M':6.3,'N':4,'O':3.9,'P':4.8,'Q':22.3,'R':12.5,'S':18.2,'T':14.2,'U':18.2,'V':14.2,'W':20.2,'X':17.6,'Y':5.6},
+    'Cart': {'A':19.2,'B':41.6,'C':10.6,'D':17,'E':15.6,'F':13.5,'G':9,'H':6.3,'I':6,'J':4.8,'K':5.6,'L':5.3,'M':6.3,'N':4,'O':3.9,'P':4.8,'Q':22.3,'R':12.5,'S':18.2,'T':14.2,'U':18.2,'V':14.2,'W':20.2,'X':17.6,'Y':5.6},
+    'View': {'A':8.3,'B':19.9,'C':20.2,'D':20.3,'E':12.6,'F':45.6,'G':14.5,'H':10.8,'I':9,'J':10.3,'K':12.2,'L':19.2,'M':20.5,'N':13.5,'O':20.3,'P':21.6,'Q':11.8,'R':12.8,'S':56.5,'T':11.2,'U':21.6,'V':24.9,'W':9.8,'X':10.8,'Y':20.2,'Z':18.3},
+}
 
 
 def clean_text(v) -> str:
-    if v is None: return ''
-    s = str(v).replace('\u00a0',' ').replace('\t',' ').replace('\n',' ').replace('\r',' ').replace('\u200b','')
+    if v is None:
+        return ''
+    s = str(v).replace('\u00a0', ' ').replace('\t', ' ').replace('\n', ' ').replace('\r', ' ').replace('\u200b', '')
     return SPACE_RE.sub(' ', s).strip()
 
 
@@ -26,14 +55,19 @@ def non(v):
 
 
 def norm_serial(v) -> str:
-    if v is None: return ''
-    if isinstance(v, bool): return str(v)
-    if isinstance(v, int): return str(v)
-    if isinstance(v, float) and math.isfinite(v) and v.is_integer(): return str(int(v))
+    if v is None:
+        return ''
+    if isinstance(v, bool):
+        return str(v)
+    if isinstance(v, int):
+        return str(v)
+    if isinstance(v, float) and math.isfinite(v) and v.is_integer():
+        return str(int(v))
     s = clean_text(v)
     try:
         f = float(s)
-        if math.isfinite(f) and f.is_integer(): return str(int(f))
+        if math.isfinite(f) and f.is_integer():
+            return str(int(f))
     except Exception:
         pass
     return s
@@ -44,14 +78,17 @@ def tag(shp, grp, col, qua, lab, flo) -> str:
 
 
 def date_only(v):
-    if isinstance(v, datetime): return datetime(v.year,v.month,v.day)
-    if isinstance(v, date): return datetime(v.year,v.month,v.day)
+    if isinstance(v, datetime):
+        return datetime(v.year, v.month, v.day)
+    if isinstance(v, date):
+        return datetime(v.year, v.month, v.day)
     return v
 
 
 def as_float(v, default=0.0):
     try:
-        if v is None or clean_text(v) == '': return default
+        if v is None or clean_text(v) == '':
+            return default
         return float(v)
     except Exception:
         return default
@@ -62,175 +99,256 @@ def read_xlsx_rows(path: Path):
     ws = wb[wb.sheetnames[0]]
     it = ws.iter_rows(values_only=True)
     headers = list(next(it))
-    ix = {h:i for i,h in enumerate(headers)}
+    ix = {h: i for i, h in enumerate(headers)}
     return wb, it, headers, ix
 
 
-def capture_template_format(template: Path):
-    wb = load_workbook(template, read_only=False, data_only=False)
-    fmt = {}; style_reps = {}
-    for s in SHEETS:
-        if s not in wb.sheetnames:
-            raise KeyError(f'Template is missing required sheet: {s}')
-        ws = wb[s]
-        headers = [ws.cell(1,c).value for c in range(1,ws.max_column+1)]
-        hstyles = [ws.cell(1,c).style_id for c in range(1,ws.max_column+1)]
-        dstyles = [ws.cell(2,c).style_id for c in range(1,ws.max_column+1)]
-        # Date helper style in View can be represented by a later populated row.
-        if s == 'View' and ws.max_column >= 26 and ws.cell(3,26).style_id:
-            dstyles[25] = ws.cell(3,26).style_id
-        for r in (1,2,3):
-            for c in range(1,ws.max_column+1):
-                cell=ws.cell(r,c); style_reps.setdefault(cell.style_id,cell)
-        fmt[s] = {
-            'headers':headers, 'hstyles':hstyles, 'dstyles':dstyles,
-            'widths':{k:v.width for k,v in ws.column_dimensions.items() if v.width is not None},
-            'row1h':ws.row_dimensions[1].height, 'freeze':ws.freeze_panes,
-            'grid':ws.sheet_view.showGridLines, 'zoom':ws.sheet_view.zoomScale,
-            'zoomn':ws.sheet_view.zoomScaleNormal, 'filter':ws.auto_filter.ref,
-        }
-    style_defs={}
-    for sid,cell in style_reps.items():
-        style_defs[sid]={'font':copy(cell.font),'fill':copy(cell.fill),'border':copy(cell.border),
-                         'alignment':copy(cell.alignment),'number_format':cell.number_format,
-                         'protection':copy(cell.protection)}
-    wb.close(); gc.collect()
-    return fmt, style_defs
-
-
 def build_maps(base_dir: Path):
-    # 120-day weighted sold average by Tag.
-    avg_sum_amt=defaultdict(float); avg_sum_carat=defaultdict(float)
-    wb,it,h,ix=read_xlsx_rows(base_dir/'sales_120_file.xlsx')
+    avg_sum_amt = defaultdict(float)
+    avg_sum_carat = defaultdict(float)
+    wb, it, _, ix = read_xlsx_rows(base_dir / 'sales_120_file.xlsx')
     for row in it:
-        t=tag(row[ix['Shp']],row[ix['Carat_Grp']],row[ix['Col']],row[ix['Qua']],row[ix['Lab']],row[ix['Flo']])
-        avg_sum_amt[t]+=as_float(row[ix['Amt']])
-        avg_sum_carat[t]+=as_float(row[ix['Carat']])
+        t = tag(row[ix['Shp']], row[ix['Carat_Grp']], row[ix['Col']], row[ix['Qua']], row[ix['Lab']], row[ix['Flo']])
+        avg_sum_amt[t] += as_float(row[ix['Amt']])
+        avg_sum_carat[t] += as_float(row[ix['Carat']])
     wb.close()
-    avg_rate={t:(avg_sum_amt[t]/c if c else 0.0) for t,c in avg_sum_carat.items()}
+    avg_rate = {t: (avg_sum_amt[t] / c if c else 0.0) for t, c in avg_sum_carat.items()}
 
-    # 180-day sale segment by Tag: count + ordered unique buyers.
-    sale_count=defaultdict(int); buyers=defaultdict(list); buyer_seen=defaultdict(set)
-    wb,it,h,ix=read_xlsx_rows(base_dir/'sales_180_file.xlsx')
+    sale_count = defaultdict(int)
+    buyers = defaultdict(list)
+    buyer_seen = defaultdict(set)
+    wb, it, _, ix = read_xlsx_rows(base_dir / 'sales_180_file.xlsx')
     for row in it:
-        t=tag(row[ix['Shp']],row[ix['Carat_Grp']],row[ix['Col']],row[ix['Qua']],row[ix['Lab']],row[ix['Flo']])
-        sale_count[t]+=1
-        p=clean_text(row[ix['Sold Party']])
-        if p and p not in buyer_seen[t]: buyer_seen[t].add(p); buyers[t].append(p)
+        t = tag(row[ix['Shp']], row[ix['Carat_Grp']], row[ix['Col']], row[ix['Qua']], row[ix['Lab']], row[ix['Flo']])
+        sale_count[t] += 1
+        p = clean_text(row[ix['Sold Party']])
+        if p and p not in buyer_seen[t]:
+            buyer_seen[t].add(p)
+            buyers[t].append(p)
     wb.close()
 
-    # Action parties by exact stone serial across all action datasets.
-    action_parties=defaultdict(list); action_seen=defaultdict(set)
-    for fn in ['Hold.xlsx','Wishlist.xlsx','View.xlsx','Offer.xlsx','Cart.xlsx']:
-        wb,it,h,ix=read_xlsx_rows(base_dir/fn)
-        serial_col='SERIAL_NO' if 'SERIAL_NO' in ix else 'Serial No'
+    action_parties = defaultdict(list)
+    action_seen = defaultdict(set)
+    for fn in ['Hold.xlsx', 'Wishlist.xlsx', 'View.xlsx', 'Offer.xlsx', 'Cart.xlsx']:
+        wb, it, _, ix = read_xlsx_rows(base_dir / fn)
+        serial_col = 'SERIAL_NO' if 'SERIAL_NO' in ix else 'Serial No'
         for row in it:
-            sn=norm_serial(row[ix[serial_col]])
-            p=clean_text(row[ix['Sold Party']]) if 'Sold Party' in ix else ''
+            sn = norm_serial(row[ix[serial_col]])
+            p = clean_text(row[ix['Sold Party']]) if 'Sold Party' in ix else ''
             if sn and p and p not in action_seen[sn]:
-                action_seen[sn].add(p); action_parties[sn].append(p)
+                action_seen[sn].add(p)
+                action_parties[sn].append(p)
         wb.close()
     return avg_rate, sale_count, buyers, action_parties
 
 
-def build_workbook(template: Path, base_dir: Path, out_path: Path, base_zip: Path|None=None):
-    fmt, style_defs = capture_template_format(template)
-    avg_rate, sale_count, buyers, action_parties = build_maps(base_dir)
+def _register_styles(wb: Workbook):
+    thin = Side(style='thin', color='000000')
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
 
+    def add(name, *, font=None, fill=None, alignment=None, number_format='General', border_value=None):
+        style = NamedStyle(name=name)
+        if font is not None:
+            style.font = font
+        if fill is not None:
+            style.fill = fill
+        if alignment is not None:
+            style.alignment = alignment
+        style.number_format = number_format
+        if border_value is not None:
+            style.border = border_value
+        wb.add_named_style(style)
+
+    add('main_header', font=Font(name='Calibri', size=11, bold=True), alignment=Alignment(horizontal='center', vertical='top'), border_value=border)
+    add('main_data', font=Font(name='Calibri', size=11), alignment=Alignment(horizontal='center'), border_value=border)
+    add('helper_header', font=Font(name='Microsoft Sans Serif', size=9, bold=True), alignment=Alignment(horizontal='center', vertical='center'), border_value=border)
+    add('helper_center', font=Font(name='Microsoft Sans Serif', size=8), alignment=Alignment(horizontal='center', vertical='center'), border_value=border)
+    add('helper_right', font=Font(name='Microsoft Sans Serif', size=8), alignment=Alignment(horizontal='right', vertical='center'), border_value=border)
+    add('helper_left', font=Font(name='Microsoft Sans Serif', size=8), alignment=Alignment(horizontal='left', vertical='center'), border_value=border)
+    add('helper_datetime', font=Font(name='Microsoft Sans Serif', size=8), alignment=Alignment(horizontal='center', vertical='center'), number_format='m/d/yy h:mm', border_value=border)
+    add('helper_date', font=Font(name='Calibri', size=11), alignment=Alignment(horizontal='center'), number_format='mm-dd-yy', border_value=border)
+    add('action_header', font=Font(name='Calibri', size=11, bold=True), alignment=Alignment(horizontal='center', vertical='center'), border_value=border)
+    add('action_data', font=Font(name='Calibri', size=11), alignment=Alignment(horizontal='center', vertical='center'), border_value=border)
+    add('action_date', font=Font(name='Calibri', size=11), alignment=Alignment(horizontal='center', vertical='center'), number_format='mm-dd-yy', border_value=border)
+    add('action_serial', font=Font(name='Calibri', size=11, bold=True), fill=PatternFill('solid', fgColor='FCE4D6'), alignment=Alignment(horizontal='center', vertical='center'), border_value=border)
+    add('view_header', font=Font(name='Calibri', size=11, bold=True), alignment=Alignment(horizontal='center', vertical='top'), border_value=border)
+    add('view_date_header', font=Font(name='Calibri', size=11, bold=True), fill=PatternFill('solid', fgColor='FFFF00'), alignment=Alignment(horizontal='center', vertical='top'), border_value=border)
+    add('view_datetime', font=Font(name='Calibri', size=11), number_format='yyyy-mm-dd hh:mm:ss')
+    add('hold_datetime', font=Font(name='Calibri', size=11), number_format='yyyy-mm-dd hh:mm:ss.000')
+    add('hold_date', font=Font(name='Calibri', size=11), number_format='mm-dd-yy')
+
+
+def _style_sequence(sheet: str, headers: list[str], *, header=False):
+    if sheet == 'Sheet1':
+        return ['main_header' if header else 'main_data'] * len(headers)
+    if sheet in {'Sale_segment', 'Avg_Rate'}:
+        if header:
+            return ['helper_header'] * len(headers)
+        styles = []
+        for h in headers:
+            if h == 'Sold Party':
+                styles.append('helper_left')
+            elif h == 'Sale Date':
+                styles.append('helper_datetime')
+            elif h == 'Date':
+                styles.append('helper_date')
+            elif h in {'Carat', 'SPer'}:
+                styles.append('helper_right')
+            elif h == 'Tag':
+                styles.append('main_data')
+            else:
+                styles.append('helper_center')
+        return styles
+    if sheet == 'Hold':
+        if header:
+            return [None] * len(headers)
+        return [None, 'hold_datetime', 'hold_date', None, None]
+    if sheet == 'View':
+        if header:
+            return ['view_date_header' if h == 'Date' else 'view_header' for h in headers]
+        date_cols = {'APPOINTMENT_DATE', 'CREATED_DATETIME', 'MODIFIED_DATETIME', 'CABIN_ASSIGN_DATE', 'Date'}
+        return ['view_datetime' if h in date_cols else None for h in headers]
+    if sheet in {'Wishlist', 'Offer', 'Cart'}:
+        if header:
+            return ['action_header'] * len(headers)
+        styles = []
+        for h in headers:
+            if h == 'CREATED_DATETIME':
+                styles.append('action_date')
+            elif h == 'Serial No':
+                styles.append('action_serial')
+            else:
+                styles.append('action_data')
+        return styles
+    return [None] * len(headers)
+
+
+def build_workbook(base_dir: Path, out_path: Path, base_zip: Path | None = None):
+    avg_rate, sale_count, buyers, action_parties = build_maps(base_dir)
     wb = Workbook(write_only=True)
-    style_names={}
-    for sid,d in sorted(style_defs.items()):
-        name=f'tmpl_{sid}'; ns=NamedStyle(name=name)
-        ns.font=d['font']; ns.fill=d['fill']; ns.border=d['border']; ns.alignment=d['alignment']
-        ns.number_format=d['number_format']; ns.protection=d['protection']; wb.add_named_style(ns); style_names[sid]=name
+    _register_styles(wb)
 
     def styled_row(ws, vals, styles):
-        cells=[]
-        for i,v in enumerate(vals):
-            c=WriteOnlyCell(ws,value=v); sid=styles[i] if i<len(styles) else 0
-            if sid in style_names: c.style=style_names[sid]
-            cells.append(c)
+        cells = []
+        for value, style in zip(vals, styles):
+            cell = WriteOnlyCell(ws, value=value)
+            if style:
+                cell.style = style
+            cells.append(cell)
         ws.append(cells)
 
-    def setup(s):
-        ws=wb.create_sheet(s); f=fmt[s]
-        for col,w in f['widths'].items(): ws.column_dimensions[col].width=w
-        if f['row1h'] is not None: ws.row_dimensions[1].height=f['row1h']
-        ws.freeze_panes=f['freeze']; ws.sheet_view.showGridLines=f['grid']
-        if f['zoom'] is not None: ws.sheet_view.zoomScale=f['zoom']
-        if f['zoomn'] is not None: ws.sheet_view.zoomScaleNormal=f['zoomn']
-        styled_row(ws,f['headers'],f['hstyles']); return ws
+    def setup(sheet):
+        ws = wb.create_sheet(sheet)
+        headers = SHEET_HEADERS[sheet]
+        for col, width in SHEET_WIDTHS.get(sheet, {}).items():
+            ws.column_dimensions[col].width = width
+        styled_row(ws, headers, _style_sequence(sheet, headers, header=True))
+        return ws, headers
 
-    counts={}
-    # Sheet1 fully rebuilt from current Stock + current processed Sales/action bases.
-    s='Sheet1'; ws=setup(s); target=fmt[s]['headers']
-    swb,sit,sh,six=read_xlsx_rows(base_dir/'Stock file.xlsx'); n=0
+    counts = {}
+
+    ws, target = setup('Sheet1')
+    swb, sit, _, six = read_xlsx_rows(base_dir / 'Stock file.xlsx')
+    n = 0
     for row in sit:
-        rec={h:row[i] for h,i in six.items()}
-        sn=norm_serial(rec.get('Serial No')); t=clean_text(rec.get('Tag')) or tag(rec.get('Shp'),rec.get('Carat_Grp'),rec.get('Color name'),rec.get('Qua'),rec.get('Lab'),rec.get('Flo'))
-        sold_avg=avg_rate.get(t,0.0); exp=as_float(rec.get('Expected'))
-        diff=round((exp-sold_avg)/exp*100,2) if exp else 0.0
-        b=buyers.get(t,[]); acts=action_parties.get(sn,[]); actset=set(acts)
-        values={
-            'Serial No':rec.get('Serial No'),'Shp':rec.get('Shp'),'Carat':rec.get('Carat'),'Carat_Grp':rec.get('Carat_Grp'),
-            'Color name':rec.get('Color name'),'Qua':rec.get('Qua'),'Cut':rec.get('Cut'),'Pol':rec.get('Pol'),'Sym':rec.get('Sym'),
-            'Lab':non(rec.get('Lab')),'Flo':non(rec.get('Flo')),'GRap':rec.get('GRap'),'GPer':rec.get('GPer'),'Expected':rec.get('Expected'),
-            'Sold_Avg_Rate_120days':sold_avg,'Diff':diff,'Remark':('Yes' if sold_avg>0 and diff>0 else 'No'),'Tag':t,
-            'Unique_Buyer_Count':len(b),'Sold_Party':(', '.join(b) if b else None),'sale_count':sale_count.get(t,0),
-            'Action_count':sum(1 for p in b if p in actset),'ALL_Action_count':len(acts),
+        rec = {h: row[i] for h, i in six.items()}
+        sn = norm_serial(rec.get('Serial No'))
+        t = clean_text(rec.get('Tag')) or tag(rec.get('Shp'), rec.get('Carat_Grp'), rec.get('Color name'), rec.get('Qua'), rec.get('Lab'), rec.get('Flo'))
+        sold_avg = avg_rate.get(t, 0.0)
+        exp = as_float(rec.get('Expected'))
+        diff = round((exp - sold_avg) / exp * 100, 2) if exp else 0.0
+        b = buyers.get(t, [])
+        acts = action_parties.get(sn, [])
+        actset = set(acts)
+        values = {
+            'Serial No': rec.get('Serial No'), 'Shp': rec.get('Shp'), 'Carat': rec.get('Carat'), 'Carat_Grp': rec.get('Carat_Grp'),
+            'Color name': rec.get('Color name'), 'Qua': rec.get('Qua'), 'Cut': rec.get('Cut'), 'Pol': rec.get('Pol'), 'Sym': rec.get('Sym'),
+            'Lab': non(rec.get('Lab')), 'Flo': non(rec.get('Flo')), 'GRap': rec.get('GRap'), 'GPer': rec.get('GPer'), 'Expected': rec.get('Expected'),
+            'Sold_Avg_Rate_120days': sold_avg, 'Diff': diff, 'Remark': ('Yes' if sold_avg > 0 and diff > 0 else 'No'), 'Tag': t,
+            'Unique_Buyer_Count': len(b), 'Sold_Party': (', '.join(b) if b else None), 'sale_count': sale_count.get(t, 0),
+            'Action_count': sum(1 for p in b if p in actset), 'ALL_Action_count': len(acts),
         }
-        styled_row(ws,[values.get(h) for h in target],fmt[s]['dstyles']); n+=1
-    swb.close(); counts[s]=n
+        styled_row(ws, [values.get(h) for h in target], _style_sequence('Sheet1', target))
+        n += 1
+    swb.close()
+    counts['Sheet1'] = n
 
-    # Sale_segment + Avg_Rate helper sheets, values (not formulas).
-    for s,fn in [('Sale_segment','sales_180_file.xlsx'),('Avg_Rate','sales_120_file.xlsx')]:
-        ws=setup(s); target=fmt[s]['headers']; swb,it,h,ix=read_xlsx_rows(base_dir/fn); n=0
+    for sheet, filename in [('Sale_segment', 'sales_180_file.xlsx'), ('Avg_Rate', 'sales_120_file.xlsx')]:
+        ws, target = setup(sheet)
+        swb, it, _, ix = read_xlsx_rows(base_dir / filename)
+        n = 0
+        styles = _style_sequence(sheet, target)
         for row in it:
-            rec={hh:row[ii] for hh,ii in ix.items()}; lab=non(rec.get('Lab')); flo=non(rec.get('Flo'))
-            t=tag(rec.get('Shp'),rec.get('Carat_Grp'),rec.get('Col'),rec.get('Qua'),lab,flo); sd=rec.get('Sale Date')
-            vals={**rec,'Lab':lab,'Flo':flo,'Date':date_only(sd),'Tag':t}
-            styled_row(ws,[vals.get(hh) for hh in target],fmt[s]['dstyles']); n+=1
-        swb.close(); counts[s]=n
+            rec = {h: row[i] for h, i in ix.items()}
+            lab = non(rec.get('Lab'))
+            flo = non(rec.get('Flo'))
+            t = tag(rec.get('Shp'), rec.get('Carat_Grp'), rec.get('Col'), rec.get('Qua'), lab, flo)
+            vals = {**rec, 'Lab': lab, 'Flo': flo, 'Date': date_only(rec.get('Sale Date')), 'Tag': t}
+            styled_row(ws, [vals.get(h) for h in target], styles)
+            n += 1
+        swb.close()
+        counts[sheet] = n
 
-    # Hold.
-    s='Hold'; ws=setup(s); target=fmt[s]['headers']; swb,it,h,ix=read_xlsx_rows(base_dir/'Hold.xlsx'); n=0
+    ws, target = setup('Hold')
+    swb, it, _, ix = read_xlsx_rows(base_dir / 'Hold.xlsx')
+    n = 0
+    styles = _style_sequence('Hold', target)
     for row in it:
-        rec={hh:row[ii] for hh,ii in ix.items()}; rec['Date']=date_only(rec.get('JANGAD_DATE'))
-        styled_row(ws,[rec.get(hh) for hh in target],fmt[s]['dstyles']); n+=1
-    swb.close(); counts[s]=n
+        rec = {h: row[i] for h, i in ix.items()}
+        rec['Date'] = date_only(rec.get('JANGAD_DATE'))
+        styled_row(ws, [rec.get(h) for h in target], styles)
+        n += 1
+    swb.close()
+    counts['Hold'] = n
 
-    # Wishlist / Offer / Cart.
-    for s in ['Wishlist','Offer','Cart']:
-        ws=setup(s); target=fmt[s]['headers']; swb,it,h,ix=read_xlsx_rows(base_dir/(s+'.xlsx')); n=0
+    for sheet in ['Wishlist', 'Offer', 'Cart']:
+        ws, target = setup(sheet)
+        swb, it, _, ix = read_xlsx_rows(base_dir / f'{sheet}.xlsx')
+        n = 0
+        styles = _style_sequence(sheet, target)
         for row in it:
-            rec={hh:row[ii] for hh,ii in ix.items()}
-            if 'Lab' in rec: rec['Lab']=non(rec['Lab'])
-            if 'Flo' in rec: rec['Flo']=non(rec['Flo'])
-            styled_row(ws,[rec.get(hh) for hh in target],fmt[s]['dstyles']); n+=1
-        swb.close(); counts[s]=n
+            rec = {h: row[i] for h, i in ix.items()}
+            if 'Lab' in rec:
+                rec['Lab'] = non(rec['Lab'])
+            if 'Flo' in rec:
+                rec['Flo'] = non(rec['Flo'])
+            styled_row(ws, [rec.get(h) for h in target], styles)
+            n += 1
+        swb.close()
+        counts[sheet] = n
 
-    # View: one RAW row = one SERIAL_NO value, no comma split; blank/zero already removed by processor.
-    s='View'; ws=setup(s); target=fmt[s]['headers']; swb,it,h,ix=read_xlsx_rows(base_dir/'View.xlsx'); n=0
+    ws, target = setup('View')
+    swb, it, _, ix = read_xlsx_rows(base_dir / 'View.xlsx')
+    n = 0
+    styles = _style_sequence('View', target)
     for row in it:
-        rec={hh:row[ii] for hh,ii in ix.items()}; rec['Date']=date_only(rec.get('CREATED_DATETIME'))
-        styled_row(ws,[rec.get(hh) for hh in target],fmt[s]['dstyles']); n+=1
-    swb.close(); counts[s]=n
+        rec = {h: row[i] for h, i in ix.items()}
+        rec['Date'] = date_only(rec.get('CREATED_DATETIME'))
+        styled_row(ws, [rec.get(h) for h in target], styles)
+        n += 1
+    swb.close()
+    counts['View'] = n
 
-    out_path.parent.mkdir(parents=True,exist_ok=True); wb.save(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    wb.save(out_path)
+
     if base_zip:
-        with zipfile.ZipFile(base_zip,'w',zipfile.ZIP_DEFLATED) as z:
-            for fn in BASE_FILES: z.write(base_dir/fn,arcname=fn)
+        with zipfile.ZipFile(base_zip, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for filename in BASE_FILES:
+                zf.write(base_dir / filename, arcname=filename)
     return counts
 
 
 def main():
-    ap=argparse.ArgumentParser(description='Build formatted Auto Pricing workbook from v4.1.3 processed base files.')
-    ap.add_argument('--template',required=True,help='Existing Auto Pricing workbook used only for sheet layout/styles.')
-    ap.add_argument('--base-dir',required=True,help='Directory containing the 8 processed v4.1.3 base xlsx files.')
-    ap.add_argument('--output',required=True,help='Final formatted Auto Pricing xlsx path.')
-    ap.add_argument('--base-zip',help='Optional clean ZIP containing the 8 base files.')
-    a=ap.parse_args()
-    counts=build_workbook(Path(a.template),Path(a.base_dir),Path(a.output),Path(a.base_zip) if a.base_zip else None)
-    print('Built',a.output); print(counts)
+    ap = argparse.ArgumentParser(description='Build the formatted Auto Pricing workbook from prepared files.')
+    ap.add_argument('--base-dir', required=True)
+    ap.add_argument('--output', required=True)
+    ap.add_argument('--base-zip')
+    args = ap.parse_args()
+    counts = build_workbook(Path(args.base_dir), Path(args.output), Path(args.base_zip) if args.base_zip else None)
+    print('Built', args.output)
+    print(counts)
 
-if __name__=='__main__': main()
+
+if __name__ == '__main__':
+    main()

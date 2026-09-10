@@ -90,7 +90,8 @@ def test_deployment_exposes_version_markers():
     app_text = (root / "app.py").read_text(encoding="utf-8")
     worker_text = (root / "cloud_worker" / "run_job.py").read_text(encoding="utf-8")
     workflow_text = (root / ".github" / "workflows" / "process-suggested-cloud.yml").read_text(encoding="utf-8")
-    assert "Application version" in app_text
+    assert "APP_VERSION" in app_text
+    assert "Application version" not in app_text
     assert '"worker_version": WORKER_VERSION' in worker_text
     assert "Verify deployed project version" in workflow_text
 
@@ -98,14 +99,27 @@ def test_deployment_exposes_version_markers():
 def test_auto_pricing_full_pipeline_ui_is_exposed():
     root = Path(__file__).resolve().parents[1]
     text = (root / "app.py").read_text(encoding="utf-8")
-    assert "Full Pipeline — RAW to Final" in text
-    assert "RAW export ZIP *" in text
-    assert "Previous finalized base ZIP *" in text
-    assert "Using Git default: data/remove_parties.xlsx" in text
-    assert "Run Full Auto Pricing Pipeline" in text
+    section = text[text.index("def auto_pricing_page()"):text.index("def dealmaker_page()") ]
+    assert "Create Latest Output" in section
+    assert "Latest files" in section
+    assert "Previous files" in section
+    assert "Stock file *" in section
+    assert "Sales file *" in section
+    assert "Previous 180-day Sales file *" in section
+    assert "View file (optional)" in section
+    assert "Previous action files (optional)" in section
+    assert "Removed parties list" in section
+    assert "Files ready for this run" in section
+    assert "Files used and results" in section
+    assert "Auto Pricing template" not in section
+    assert "Git" not in section
+    assert "RAW" not in section
+    assert "v4.1.3" not in section
+    assert "Previous Stock" not in section
+    assert "Create Auto Pricing" in section
 
 
-def test_auto_pricing_removed_parties_git_default_exists():
+def test_auto_pricing_saved_files_exist():
     root = Path(__file__).resolve().parents[1]
     assert (root / "data" / "remove_parties.xlsx").is_file()
     assert (root / "processors" / "auto_pricing_finalizer_v4_1_3" / "process_datasets_v4_1_3.py").is_file()

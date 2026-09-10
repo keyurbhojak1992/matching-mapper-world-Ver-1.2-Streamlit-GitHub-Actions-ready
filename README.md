@@ -137,3 +137,11 @@ The four administrator-managed default inputs are stored in the private reposito
 Developed by **Keyur Bhojak** for diamond matching and stock recommendation analysis.
 
 Copyright © 2026 Keyur Bhojak. All rights reserved.
+
+
+## Auto Pricing v1.9.2
+
+Auto Pricing uses individual Excel uploads. Stock and Sales current files plus the previous 120-day and 180-day Sales files are required. View, Hold, Offer, Wishlist and Cart files are optional. The Removed Parties list is stored with the application and is applied automatically. The final Auto Pricing workbook is created directly by the application; no separate template file is required.
+
+### Auto Pricing Stock history note
+In Full Pipeline mode, **no previous Stock file is required**. Stock is rebuilt entirely from the latest Stock RAW snapshot. Previous history is required only for Sales 120/180 and the action datasets (View, Hold, Offer, Wishlist, Cart).

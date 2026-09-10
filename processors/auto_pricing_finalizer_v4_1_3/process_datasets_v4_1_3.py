@@ -154,6 +154,7 @@ ASHWIN BHAI   SHANKAR
 CONTROL_RE = re.compile(r'[\x00-\x1f]')
 SPACE_RE = re.compile(r' +')
 DERIVED_COLUMNS = {'Carat_Grp', 'Amt', 'Tag'}
+STOCK_FINAL_HEADERS = ['Serial No', 'Shp', 'Carat', 'Carat_Grp', 'Color name', 'Qua', 'Cut', 'Pol', 'Sym', 'Lab', 'Flo', 'GRap', 'GPer', 'Expected', 'Tag']
 LEGACY_FINAL_COLUMNS = {'date'}  # Obsolete helper column; never used for current-date/window logic.
 MAPPING_FILE = Path(os.environ.get('COLUMN_MAPPING_FILE', str(Path(__file__).with_name('column_mapping_aliases.json'))))
 
@@ -762,7 +763,9 @@ def schema_mapping(dataset: str, final_headers: list[str], raw_headers: list[str
 def read_history(dataset, history_path: Path, headers, date_col, audit):
     records = []
     invalid = 0
+    blacklist_removed = 0
     samples = 0
+    blacklist_samples = 0
     for source_row, row in rows_as_dicts(history_path):
         rec = {h: clean_value(row.get(h)) for h in headers}
         normalize_lab_flo(rec)
@@ -778,9 +781,17 @@ def read_history(dataset, history_path: Path, headers, date_col, audit):
                 samples += 1
             continue
         rec[date_col] = dt
+        if party_rejected(rec):
+            blacklist_removed += 1
+            if blacklist_samples < 25:
+                add_issue(audit, dataset, 'INFO', 'Removed party excluded from previous file', history_path.name, source_row,
+                          key=key_text(rec, ['Serial No' if 'Serial No' in rec else 'SERIAL_NO', date_col]),
+                          details='Party/Sold Party matched the saved removal list after text cleaning.')
+                blacklist_samples += 1
+            continue
         rec['_source_row'] = source_row
         records.append(rec)
-    return records, invalid
+    return records, invalid, blacklist_removed
 
 
 def process_history_log(dataset: str, raw_path: Path, history_path: Path, out_name: str, date_col: str,
@@ -800,7 +811,7 @@ def process_history_log(dataset: str, raw_path: Path, history_path: Path, out_na
             add_issue(audit, dataset, 'ERROR', 'Missing source column', source_label(raw_path), column=m['Final Column'],
                       details=f"No raw source found. Candidates: {m['Candidate Raw Columns']}")
 
-    history, history_invalid = read_history(dataset, history_path, headers, date_col, audit)
+    history, history_invalid, history_blacklist = read_history(dataset, history_path, headers, date_col, audit)
     if history_invalid:
         summary = make_failed_summary(dataset, out_name, raw_path, history_path, date_col, f'{history_invalid} invalid history date row(s)')
         audit['summary'].append(summary)
@@ -918,7 +929,7 @@ def process_history_log(dataset: str, raw_path: Path, history_path: Path, out_na
         'Source Rule': 'Previous final preserved before its latest calendar date; if RAW contains that date, the whole boundary date is replaced from RAW; later RAW dates appended. Otherwise append only after latest timestamp.',
         'Window Rule': f'{days}-day window; ' + ('anchor=current processing date' if hold_mode else 'anchor=today when current-day log exists, otherwise yesterday'),
         'Date Field': date_col, 'Processing Date': today.isoformat(), 'Anchor Date': anchor.isoformat(), 'Cutoff Date': cutoff.isoformat(),
-        'History Rows': len(history), 'History Invalid Dates': history_invalid, 'Latest History Timestamp': history_max,
+        'History Rows': len(history), 'History Invalid Dates': history_invalid, 'History Blacklist Removed': history_blacklist, 'Latest History Timestamp': history_max,
         'Raw Rows Read': raw_rows, 'Raw Valid Dates': raw_valid, 'Raw Invalid Dates': raw_invalid,
         'Raw New Rows Appended': len(appended), 'Raw Historical/Overlap Rows Skipped': raw_old_overlap,
         'Boundary History Rows Replaced': boundary_history_removed,
@@ -941,7 +952,7 @@ def process_view(raw_path: Path, history_path: Path, out_name='View.xlsx', audit
             add_issue(audit, dataset, 'ERROR', 'Missing source column', source_label(raw_path), column=m['Final Column'],
                       details=f"No raw source found. Candidates: {m['Candidate Raw Columns']}")
 
-    history, history_invalid = read_history(dataset, history_path, headers, 'CREATED_DATETIME', audit)
+    history, history_invalid, history_blacklist = read_history(dataset, history_path, headers, 'CREATED_DATETIME', audit)
     history_clean = []
     history_bad_stone = 0
     for rec in history:
@@ -1032,7 +1043,7 @@ def process_view(raw_path: Path, history_path: Path, out_name='View.xlsx', audit
         'Source Rule': 'Previous final preserved before latest-history date; boundary date refreshed from RAW when present; later RAW rows appended; STONE_ID kept as one SERIAL_NO value',
         'Window Rule': '90-day window from processing date; blank/0 SERIAL_NO removed; no STONE_ID split; exact row deduplication deferred',
         'Date Field': 'CREATED_DATETIME', 'Processing Date': today.isoformat(), 'Anchor Date': anchor.isoformat(), 'Cutoff Date': cutoff.isoformat(),
-        'History Rows': len(history), 'History Invalid Dates': history_invalid, 'Latest History Timestamp': history_max,
+        'History Rows': len(history), 'History Invalid Dates': history_invalid, 'History Blacklist Removed': history_blacklist, 'Latest History Timestamp': history_max,
         'Raw Rows Read': raw_rows, 'Raw Valid Dates': len(valid_raw), 'Raw Invalid Dates': raw_invalid,
         'Raw New Rows Appended': len(appended), 'Raw Historical/Overlap Rows Skipped': raw_old,
         'Boundary History Rows Replaced': boundary_history_removed,
@@ -1362,9 +1373,10 @@ def process_sales(raw_path: Path, final120: Path, final180: Path, audit=None):
         reports.append(summary)
     return reports, all_ok and all(r.get('Status') == 'PASS' for r in reports)
 
-def process_stock(raw_path: Path, final_path_: Path, out_name='Stock file.xlsx', audit=None):
+def process_stock(raw_path: Path, out_name='Stock file.xlsx', audit=None):
     dataset = 'Stock'
-    headers = read_final_headers(final_path_)
+    # Stock is a current snapshot. It does not use or require a previous Stock workbook.
+    headers = list(STOCK_FINAL_HEADERS)
     raw_headers = read_headers(raw_path)
     mapping_rows = schema_mapping(dataset, headers, raw_headers)
     audit['mapping'].extend(mapping_rows)
@@ -1411,7 +1423,7 @@ def process_stock(raw_path: Path, final_path_: Path, out_name='Stock file.xlsx',
     status = 'PASS' if all(m['Status'] != 'MISSING' or m['Final Column'] in DERIVED_COLUMNS for m in mapping_rows) else 'FAILED'
     summary = {
         'Dataset': dataset, 'Output File': out_name, 'Raw File': source_label(raw_path),
-        'Previous Final File': final_path_.name + ' (headers only; data ignored)', 'Source Rule': 'RAW Stock only; no history merge; no deduplication',
+        'Previous Final File': '', 'Source Rule': 'RAW Stock only; no previous Stock file required; no history merge; no deduplication',
         'Window Rule': 'Current snapshot', 'Date Field': '', 'Processing Date': processing_date().isoformat(), 'Anchor Date': '', 'Cutoff Date': '',
         'History Rows': 'Not used', 'History Invalid Dates': 'Not used', 'Latest History Timestamp': 'Not used',
         'Raw Rows Read': raw_rows, 'Raw Valid Dates': '', 'Raw Invalid Dates': 0, 'Raw New Rows Appended': 'All valid raw rows are source',
@@ -1513,7 +1525,7 @@ def main():
     _, ok = process_view(view_raw, final_path('View.xlsx'), 'View.xlsx', audit=audit); ok_flags.append(ok)
     _, ok = process_history_log('Wishlist', wishlist_raw, final_path('Wishlist.xlsx'), 'Wishlist.xlsx', 'CREATED_DATETIME', ACTIVITY_DAYS, audit=audit); ok_flags.append(ok)
     _, ok = process_sales(sales_raw, final_path('sales_120_file.xlsx'), final_path('sales_180_file.xlsx'), audit=audit); ok_flags.append(ok)
-    _, ok = process_stock(stock_raw, final_path('Stock file.xlsx'), 'Stock file.xlsx', audit=audit); ok_flags.append(ok)
+    _, ok = process_stock(stock_raw, 'Stock file.xlsx', audit=audit); ok_flags.append(ok)
 
     audit_path = OUT_DIR / 'Processing_Audit.xlsx'; write_audit(audit, audit_path)
     report = {
@@ -1525,7 +1537,7 @@ def main():
             'View': 'Previous final preserved before boundary date; boundary date refreshed from RAW; STONE_ID kept as one SERIAL_NO value; blank/0 removed; processing-date 90-day window; exact-row dedup deferred',
             'Hold': 'Same whole-boundary-date refresh rule; SERIAL_NO comes from RAW SERIAL_NO; 90-day window from processing date; exact-row dedup deferred',
             'Sales': 'Sales 120/180 input files carry descriptive history. Current RAW updates SPer/SRate on exact Serial No + Sale Date overlaps and appends new transactions. Blank Lab/Flo become NON.',
-            'Stock': 'RAW Stock only; previous final used for headers only; no deduplication',
+            'Stock': 'RAW Stock only; no previous Stock file required; canonical output headers are built into the processor; no deduplication',
             'Derived Fields': 'Sales Carat_Grp/Amt and Stock Carat_Grp/Tag are computed in Python and written as values; blank Lab/Flo become NON; downstream logic does not depend on Excel cached formulas.',
         },
         'summary': audit['summary'], 'issue_counts': dict(Counter(x['Severity'] for x in audit['issues'])),
