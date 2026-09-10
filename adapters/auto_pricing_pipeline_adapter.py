@@ -145,8 +145,10 @@ def _run(cmd: list[str], *, env: dict[str, str] | None = None) -> str:
         check=False,
     )
     if completed.returncode != 0:
-        tail = (completed.stdout or "")[-8000:]
-        raise RuntimeError(f"Auto Pricing could not be completed.\n{tail}")
+        raise RuntimeError(
+            "Auto Pricing could not be completed because one of the selected files "
+            "could not be processed safely. Please review the file status shown above and try again."
+        )
     return completed.stdout or ""
 
 

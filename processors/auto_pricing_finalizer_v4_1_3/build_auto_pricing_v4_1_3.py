@@ -95,12 +95,33 @@ def as_float(v, default=0.0):
 
 
 def read_xlsx_rows(path: Path):
+    """Read the first worksheet and normalize every data row to header width.
+
+    Excel does not physically store trailing blank cells. In read-only mode openpyxl
+    can therefore return a shorter tuple for rows whose right-most fields are blank.
+    The Auto Pricing builder addresses columns by their header position, so pad those
+    rows with ``None`` instead of treating a valid blank cell as a malformed row.
+    """
     wb = load_workbook(path, read_only=True, data_only=True)
     ws = wb[wb.sheetnames[0]]
-    it = ws.iter_rows(values_only=True)
-    headers = list(next(it))
-    ix = {h: i for i, h in enumerate(headers)}
-    return wb, it, headers, ix
+    source_rows = ws.iter_rows(values_only=True)
+    try:
+        headers = list(next(source_rows))
+    except StopIteration as exc:
+        wb.close()
+        raise ValueError(f"Workbook has no header row: {path.name}") from exc
+
+    width = len(headers)
+    ix = {h: i for i, h in enumerate(headers) if h is not None}
+
+    def padded_rows():
+        for row in source_rows:
+            row = tuple(row)
+            if len(row) < width:
+                row = row + (None,) * (width - len(row))
+            yield row
+
+    return wb, padded_rows(), headers, ix
 
 
 def build_maps(base_dir: Path):

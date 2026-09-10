@@ -97,3 +97,47 @@ def test_optional_previous_action_files_get_valid_empty_workbooks_when_omitted()
             rows = list(ws.iter_rows(values_only=True))
             assert len(rows) == 1
             wb.close()
+
+
+def test_auto_pricing_builder_tolerates_trailing_blank_action_cells(tmp_path):
+    """A blank trailing Sold Party cell must not make an action row unreadable."""
+    from datetime import datetime
+    from openpyxl import Workbook
+    from processors.auto_pricing_finalizer_v4_1_3.build_auto_pricing_v4_1_3 import build_maps
+
+    def save_book(name, headers, rows):
+        wb = Workbook()
+        ws = wb.active
+        ws.append(headers)
+        for row in rows:
+            ws.append(row)
+        wb.save(tmp_path / name)
+
+    sales_headers = [
+        'Serial No', 'Shp', 'Carat', 'Carat_Grp', 'Col', 'Qua', 'Cut', 'Pol', 'Sym',
+        'Lab', 'Flo', 'Sold Party', 'Sale Date', 'SPer', 'SRate', 'Amt'
+    ]
+    sale_row = [
+        1, 'RND', 1.0, '1.00-1.49', 'D', 'VS1', 'EX', 'EX', 'EX',
+        'GIA', 'NON', 'Buyer', datetime(2026, 8, 20), 0, 100, 100
+    ]
+    save_book('sales_120_file.xlsx', sales_headers, [sale_row])
+    save_book('sales_180_file.xlsx', sales_headers, [sale_row])
+
+    # Excel omits the final blank cell from the stored row. This used to trigger
+    # IndexError when the builder accessed the Sold Party column by position.
+    save_book(
+        'Hold.xlsx',
+        ['SERIAL_NO', 'JANGAD_DATE', 'Date', 'PARTY_CODE', 'Sold Party'],
+        [[123, datetime(2026, 8, 20), datetime(2026, 8, 20), 'P001']],
+    )
+    save_book('Wishlist.xlsx', ['CREATED_DATETIME', 'Sold Party', 'Serial No'], [])
+    save_book('View.xlsx', ['SEQ_NO', 'Sold Party', 'SERIAL_NO'], [])
+    save_book('Offer.xlsx', ['CREATED_DATETIME', 'Sold Party', 'Serial No'], [])
+    save_book('Cart.xlsx', ['CREATED_DATETIME', 'Sold Party', 'Serial No'], [])
+
+    avg_rate, sale_count, buyers, action_parties = build_maps(tmp_path)
+    assert avg_rate
+    assert sale_count
+    assert buyers
+    assert dict(action_parties) == {}
