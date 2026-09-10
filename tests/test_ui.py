@@ -99,13 +99,19 @@ def test_auto_pricing_full_pipeline_ui_is_exposed():
     root = Path(__file__).resolve().parents[1]
     text = (root / "app.py").read_text(encoding="utf-8")
     assert "Full Pipeline — RAW to Final" in text
-    assert "RAW export ZIP *" in text
-    assert "Previous finalized base ZIP *" in text
+    assert "Latest RAW files" in text
+    assert "Previous finalized base files" in text
+    assert "Stock RAW file *" in text
+    assert "180-day Sales file *" in text
+    assert "View actions *" in text
     assert "Using Git default: data/remove_parties.xlsx" in text
+    assert "using Git default data/auto_pricing_template.xlsx" in text
+    assert "Auto Pricing template workbook *" not in text
     assert "Run Full Auto Pricing Pipeline" in text
 
 
-def test_auto_pricing_removed_parties_git_default_exists():
+def test_auto_pricing_git_defaults_exist():
     root = Path(__file__).resolve().parents[1]
     assert (root / "data" / "remove_parties.xlsx").is_file()
+    assert (root / "data" / "auto_pricing_template.xlsx").is_file()
     assert (root / "processors" / "auto_pricing_finalizer_v4_1_3" / "process_datasets_v4_1_3.py").is_file()

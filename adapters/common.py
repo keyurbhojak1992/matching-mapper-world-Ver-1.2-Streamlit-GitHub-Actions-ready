@@ -24,6 +24,7 @@ DEFAULT_DATA_FILES = {
     "filters": "filters - EBID.xlsx",
     "no_need": "no_need.xlsx",
     "auto_pricing_remove_parties": "remove_parties.xlsx",
+    "auto_pricing_template": "auto_pricing_template.xlsx",
 }
 
 
