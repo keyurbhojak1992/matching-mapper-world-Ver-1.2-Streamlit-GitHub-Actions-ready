@@ -10,11 +10,7 @@ from pathlib import Path
 import streamlit as st
 
 from adapters.auto_pricing_adapter import ACTION_NAMES as AUTO_PRICING_ACTION_NAMES, run_auto_pricing
-from adapters.auto_pricing_pipeline_adapter import (
-    default_auto_pricing_template_bytes,
-    default_remove_party_bytes,
-    run_auto_pricing_full_pipeline_from_files,
-)
+from adapters.auto_pricing_pipeline_adapter import default_remove_party_bytes, run_auto_pricing_full_pipeline
 from adapters.bid_drop_adapter import run_bid_drop_checking
 from adapters.common import repository_data_path
 from adapters.dealmaker_adapter import bundled_dealmaker_control_bytes, run_dealmaker
@@ -981,80 +977,52 @@ def auto_pricing_page() -> None:
 
     with tab_full:
         st.caption(
-            "Recommended workflow. Upload the latest RAW exports and the previous finalized base files individually. "
-            "The Auto Pricing template and Removed Parties master are loaded automatically from Git, so no template upload is required."
+            "Recommended workflow. The app runs Dataset Finalizer v4.1.3 first, validates all eight base datasets, "
+            "then rebuilds the formatted Auto Pricing workbook. Production processing date is automatically based on Asia/Kolkata."
         )
 
-        template_bytes = default_auto_pricing_template_bytes()
-        if template_bytes is not None:
-            st.success("Auto Pricing format/template: using Git default data/auto_pricing_template.xlsx — no upload required.")
-        else:
-            st.error("Git default data/auto_pricing_template.xlsx is missing. Add it to the repository before processing.")
-
-        st.markdown("#### 1. Latest RAW files")
-        st.caption(
-            "Upload the latest seven RAW exports. The app assigns each upload to its known dataset, so the original file name does not need to follow a strict naming pattern."
-        )
-        raw_uploads = {}
-        raw_specs = [
-            ("Stock", "Stock RAW file *"),
-            ("Sales", "Sales RAW file *"),
-            ("View", "View RAW actions *"),
-            ("Hold", "Hold RAW actions *"),
-            ("Offer", "Offer RAW actions *"),
-            ("Wishlist", "Wishlist RAW actions *"),
-            ("Cart", "Cart RAW actions *"),
-        ]
-        raw_columns = st.columns(3)
-        for index, (dataset, label) in enumerate(raw_specs):
-            with raw_columns[index % 3]:
-                raw_uploads[dataset] = st.file_uploader(
-                    label,
-                    type=["xlsx"],
-                    key=f"auto_pricing_full_raw_{dataset.lower().replace(' ', '_')}",
-                )
-
-        st.markdown("#### 2. Previous finalized base files")
-        st.caption(
-            "This is the same base-file structure used by the existing Auto Pricing section. "
-            "If the previous file ends on a date that also exists in RAW, that entire boundary date is replaced from RAW."
-        )
-
-        previous_uploads = {}
-        left, middle, right = st.columns(3)
-        with left:
-            previous_uploads["Stock"] = st.file_uploader(
-                "Stock file *", type=["xlsx"], key="auto_pricing_full_previous_stock"
+        st.markdown("#### 1. Main uploads")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            raw_zip = st.file_uploader(
+                "RAW export ZIP *",
+                type=["zip"],
+                key="auto_pricing_full_raw_zip",
+                help="ZIP containing the latest RAW Cart, Hold, Offer, View, Wishlist, Sales and Stock exports.",
             )
-        with middle:
-            previous_uploads["Sales 180"] = st.file_uploader(
-                "180-day Sales file *", type=["xlsx"], key="auto_pricing_full_previous_sales_180"
+        with c2:
+            previous_base_zip = st.file_uploader(
+                "Previous finalized base ZIP *",
+                type=["zip"],
+                key="auto_pricing_full_previous_zip",
+                help="ZIP containing Cart.xlsx, Hold.xlsx, Offer.xlsx, View.xlsx, Wishlist.xlsx, sales_120_file.xlsx, sales_180_file.xlsx and Stock file.xlsx.",
             )
-        with right:
-            previous_uploads["Sales 120"] = st.file_uploader(
-                "120-day Sales file *", type=["xlsx"], key="auto_pricing_full_previous_sales_120"
+        with c3:
+            pricing_template = st.file_uploader(
+                "Auto Pricing template workbook *",
+                type=["xlsx"],
+                key="auto_pricing_full_template",
+                help="Your latest Auto Pricing workbook. Its sheet layout and formatting are used for the final formatted output.",
             )
 
-        st.markdown("##### Action history files")
-        history_action_specs = [
-            ("View", "View actions *"),
-            ("Hold", "Hold actions *"),
-            ("Offer", "Offer actions *"),
-            ("Wishlist", "Wishlist actions *"),
-            ("Cart", "Cart actions *"),
-        ]
-        history_columns = st.columns(3)
-        for index, (dataset, label) in enumerate(history_action_specs):
-            with history_columns[index % 3]:
-                previous_uploads[dataset] = st.file_uploader(
-                    label,
-                    type=["xlsx"],
-                    key=f"auto_pricing_full_previous_{dataset.lower()}",
-                )
-
+        st.markdown("#### 2. Optional Sales history replacements")
         st.caption(
-            "Media is not part of the validated v4.1.3 RAW/history finalizer. The existing Prepared Base Files mode still supports Media as an optional action input."
+            "Leave these blank to use sales_120_file.xlsx and sales_180_file.xlsx from the Previous finalized base ZIP. "
+            "Upload replacements only when you intentionally want to replace those two history bases."
         )
+        s1, s2 = st.columns(2)
+        with s1:
+            sales_120_override = st.file_uploader(
+                "Sales 120 history override (optional)",
+                type=["xlsx"],
+                key="auto_pricing_full_sales120_override",
+            )
+        with s2:
+            sales_180_override = st.file_uploader(
+                "Sales 180 history override (optional)",
+                type=["xlsx"],
+                key="auto_pricing_full_sales180_override",
+            )
 
         st.markdown("#### 3. Removed Parties")
         default_remove_bytes = default_remove_party_bytes()
@@ -1064,7 +1032,7 @@ def auto_pricing_page() -> None:
                 "Removed Parties override (optional)",
                 type=["xlsx"],
                 key="auto_pricing_full_remove_party_override",
-                help="Normally leave blank. The app automatically uses the Git-tracked data/remove_parties.xlsx file.",
+                help="If blank, the app automatically uses the Git-tracked data/remove_parties.xlsx file.",
             )
             if remove_party_override is not None:
                 st.info("This run will use the uploaded Removed Parties override.")
@@ -1096,24 +1064,12 @@ def auto_pricing_page() -> None:
             ).strip()
 
         missing = []
-        for dataset, label in raw_specs:
-            if raw_uploads.get(dataset) is None:
-                missing.append(label.replace(" *", ""))
-        previous_labels = {
-            "Stock": "Stock file",
-            "Sales 180": "180-day Sales file",
-            "Sales 120": "120-day Sales file",
-            "View": "View actions",
-            "Hold": "Hold actions",
-            "Offer": "Offer actions",
-            "Wishlist": "Wishlist actions",
-            "Cart": "Cart actions",
-        }
-        for dataset, label in previous_labels.items():
-            if previous_uploads.get(dataset) is None:
-                missing.append(label)
-        if template_bytes is None:
-            missing.append("Git Auto Pricing template")
+        if raw_zip is None:
+            missing.append("RAW export ZIP")
+        if previous_base_zip is None:
+            missing.append("Previous finalized base ZIP")
+        if pricing_template is None:
+            missing.append("Auto Pricing template workbook")
         if remove_party_override is None and default_remove_bytes is None:
             missing.append("Removed Parties file")
 
@@ -1128,18 +1084,13 @@ def auto_pricing_page() -> None:
                 if test_date and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", test_date):
                     raise ValueError("Test processing date must be YYYY-MM-DD, or left blank for production.")
                 with st.spinner("Finalizing bases, applying Removed Parties, validating the audit, and building Auto Pricing..."):
-                    data, filename, logs = run_auto_pricing_full_pipeline_from_files(
-                        raw_files={
-                            name: uploaded.getvalue() if uploaded is not None else None
-                            for name, uploaded in raw_uploads.items()
-                        },
-                        previous_base_files={
-                            name: uploaded.getvalue() if uploaded is not None else None
-                            for name, uploaded in previous_uploads.items()
-                        },
-                        remove_party_bytes=(
-                            remove_party_override.getvalue() if remove_party_override is not None else None
-                        ),
+                    data, filename, logs = run_auto_pricing_full_pipeline(
+                        raw_zip_bytes=raw_zip.getvalue(),
+                        previous_base_zip_bytes=previous_base_zip.getvalue(),
+                        template_bytes=pricing_template.getvalue(),
+                        remove_party_bytes=(remove_party_override.getvalue() if remove_party_override is not None else None),
+                        sales_120_history_bytes=(sales_120_override.getvalue() if sales_120_override is not None else None),
+                        sales_180_history_bytes=(sales_180_override.getvalue() if sales_180_override is not None else None),
                         test_date=test_date or None,
                     )
                     _save_result("auto_pricing_full_result", data, filename, logs)

@@ -29,27 +29,6 @@ BASE_FILES = (
     "Stock file.xlsx",
 )
 
-RAW_UPLOAD_NAMES = {
-    "Cart": "ADD_TO_CART.xlsx",
-    "Hold": "JANGAD_HISTORY.xlsx",
-    "Offer": "OFFER_PLACE.xlsx",
-    "View": "APPOINTMENT.xlsx",
-    "Wishlist": "WISHLIST.xlsx",
-    "Sales": "SALE_DATA.xlsx",
-    "Stock": "KSTAKA.xlsx",
-}
-
-HISTORY_UPLOAD_NAMES = {
-    "Cart": "Cart.xlsx",
-    "Hold": "Hold.xlsx",
-    "Offer": "Offer.xlsx",
-    "View": "View.xlsx",
-    "Wishlist": "Wishlist.xlsx",
-    "Sales 120": "sales_120_file.xlsx",
-    "Sales 180": "sales_180_file.xlsx",
-    "Stock": "Stock file.xlsx",
-}
-
 
 def default_remove_party_path() -> Path:
     return repository_data_path("auto_pricing_remove_parties")
@@ -58,32 +37,6 @@ def default_remove_party_path() -> Path:
 def default_remove_party_bytes() -> bytes | None:
     path = default_remove_party_path()
     return path.read_bytes() if path.is_file() else None
-
-
-def default_auto_pricing_template_path() -> Path:
-    return repository_data_path("auto_pricing_template")
-
-
-def default_auto_pricing_template_bytes() -> bytes | None:
-    path = default_auto_pricing_template_path()
-    return path.read_bytes() if path.is_file() else None
-
-
-def _named_xlsx_zip(
-    files: dict[str, bytes | None],
-    canonical_names: dict[str, str],
-    label: str,
-) -> bytes:
-    """Build the same ZIP structure expected by the finalizer from individual uploads."""
-    missing = [key for key in canonical_names if not files.get(key)]
-    if missing:
-        raise ValueError(f"{label} is missing required file(s): {', '.join(missing)}")
-
-    payload = io.BytesIO()
-    with zipfile.ZipFile(payload, "w", zipfile.ZIP_DEFLATED) as zf:
-        for key, filename in canonical_names.items():
-            zf.writestr(filename, files[key] or b"")
-    return payload.getvalue()
 
 
 def _extract_xlsx_zip(payload: bytes, target: Path, label: str) -> None:
@@ -127,32 +80,11 @@ def _run(cmd: list[str], *, env: dict[str, str] | None = None) -> str:
     return completed.stdout or ""
 
 
-def run_auto_pricing_full_pipeline_from_files(
-    *,
-    raw_files: dict[str, bytes | None],
-    previous_base_files: dict[str, bytes | None],
-    remove_party_bytes: bytes | None = None,
-    test_date: str | None = None,
-) -> tuple[bytes, str, str]:
-    """Run the full pipeline from individual XLSX uploads used by the Streamlit UI."""
-    raw_zip = _named_xlsx_zip(raw_files, RAW_UPLOAD_NAMES, "Latest RAW uploads")
-    previous_zip = _named_xlsx_zip(
-        previous_base_files, HISTORY_UPLOAD_NAMES, "Previous finalized base uploads"
-    )
-    return run_auto_pricing_full_pipeline(
-        raw_zip_bytes=raw_zip,
-        previous_base_zip_bytes=previous_zip,
-        template_bytes=None,
-        remove_party_bytes=remove_party_bytes,
-        test_date=test_date,
-    )
-
-
 def run_auto_pricing_full_pipeline(
     *,
     raw_zip_bytes: bytes,
     previous_base_zip_bytes: bytes,
-    template_bytes: bytes | None = None,
+    template_bytes: bytes,
     remove_party_bytes: bytes | None = None,
     sales_120_history_bytes: bytes | None = None,
     sales_180_history_bytes: bytes | None = None,
@@ -178,18 +110,7 @@ def run_auto_pricing_full_pipeline(
             (history_dir / "sales_180_file.xlsx").write_bytes(sales_180_history_bytes)
 
         template_path = work / "Auto_Pricing_Template.xlsx"
-        if template_bytes is None:
-            bundled_template = default_auto_pricing_template_path()
-            if not bundled_template.is_file():
-                raise FileNotFoundError(
-                    "The Git default Auto Pricing template is missing: "
-                    "data/auto_pricing_template.xlsx"
-                )
-            template_path.write_bytes(bundled_template.read_bytes())
-            template_source = "Git default data/auto_pricing_template.xlsx"
-        else:
-            template_path.write_bytes(template_bytes)
-            template_source = "uploaded template override"
+        template_path.write_bytes(template_bytes)
 
         if remove_party_bytes is not None:
             remove_party_path = work / "remove_parties_override.xlsx"
@@ -218,7 +139,6 @@ def run_auto_pricing_full_pipeline(
             env.pop("TEST_PROCESSING_DATE", None)
 
         logs = []
-        logs.append(f"Auto Pricing template source: {template_source}")
         logs.append(f"Removed Parties source: {removal_source}")
         logs.append(_run([sys.executable, str(PROCESSOR)], env=env))
 

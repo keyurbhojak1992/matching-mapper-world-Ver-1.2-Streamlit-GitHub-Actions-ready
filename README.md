@@ -137,8 +137,3 @@ The four administrator-managed default inputs are stored in the private reposito
 Developed by **Keyur Bhojak** for diamond matching and stock recommendation analysis.
 
 Copyright © 2026 Keyur Bhojak. All rights reserved.
-
-
-## Auto Pricing v1.9.1
-
-The Full Pipeline uses individual Excel uploads for the latest RAW exports and previous finalized base files. The Auto Pricing workbook template is bundled at `data/auto_pricing_template.xlsx`, and Removed Parties defaults to `data/remove_parties.xlsx`, so neither file needs to be uploaded for normal runs.
