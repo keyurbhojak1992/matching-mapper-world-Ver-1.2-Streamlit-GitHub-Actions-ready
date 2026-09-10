@@ -20,7 +20,7 @@ Start with [`START_HERE.md`](START_HERE.md). The full one-time setup, security m
 
 ### New in 1.8.0
 
-- **Auto Pricing**: runs the preserved Auto Pricing calculations from Stock, 180-day Sales, 120-day Sales, and View/Hold/Offer/Wishlist/Cart/Media action files. The two original XLSX outputs are packaged together for download.
+- **Auto Pricing**: runs the supplied Dataset Finalizer + Auto Pricing v4.1.3 flow. Upload the current RAW ZIP, previous finalized-base ZIP, and Auto Pricing template; optional Remove Party and replacement Sales history files are also supported. The result includes the rebuilt pricing workbook, clean finalized-base ZIP, processing audit, and JSON report.
 - **Dealmaker**: runs the complete supplied v8.2.2 production package, including preflight, staged allocation, deal books, and release-gate audit. The verified bundled `Dealmaker_Full_Control_v6.xlsx` is used by default; an updated control workbook can be uploaded per run without changing the bundled base.
 - **Layout Stock Matcher**: runs the preserved layout matching engine from Layout Stock, Sales, and Actions with the source defaults and optional source-supported controls.
 - **USA Suggested Stock Mapper** remains available from v1.7.0.
@@ -75,7 +75,7 @@ Adapters provide temporary paths, runtime overrides, Linux-compatible upload/dow
 
 ## Other workflows
 
-- **Auto Pricing** — preserves the supplied pricing and cross-verification calculations; only desktop input/output paths are adapted to temporary app files.
+- **Auto Pricing** — invokes the supplied v4.1.3 dataset finalizer and formatted workbook builder using temporary app files. Production processing date is the current Asia/Kolkata date; the regression-only test-date option is intentionally not exposed in the live UI.
 - **Dealmaker** — invokes the supplied v8.2.2 production runner directly. Use the bundled control base or upload an updated `Dealmaker_Full_Control_v6.xlsx` for the current run.
 - **Layout Stock Matcher** — invokes the preserved layout matching source with Layout Stock, Sales, and Actions uploads.
 - **Demand Filter Mapper** — applies the preserved demand/filter process.

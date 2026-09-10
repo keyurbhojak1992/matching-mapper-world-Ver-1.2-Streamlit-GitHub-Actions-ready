@@ -9,7 +9,7 @@ from pathlib import Path
 
 import streamlit as st
 
-from adapters.auto_pricing_adapter import ACTION_NAMES as AUTO_PRICING_ACTION_NAMES, run_auto_pricing
+from adapters.auto_pricing_adapter import run_auto_pricing
 from adapters.bid_drop_adapter import run_bid_drop_checking
 from adapters.common import repository_data_path
 from adapters.dealmaker_adapter import bundled_dealmaker_control_bytes, run_dealmaker
@@ -397,7 +397,7 @@ def overview_page() -> None:
     cards = [
         ("PROFILE MATCHING", "Suggested Stock Mapper", "Output: Suggested report ZIP"),
         ("USA SALES HISTORY", "USA Suggested Stock Mapper", "Output: Salesperson / party suggested ZIP"),
-        ("PRICING INTELLIGENCE", "Auto Pricing", "Output: Pricing revision + cross-verification ZIP"),
+        ("PRICING INTELLIGENCE", "Auto Pricing", "Output: Final pricing workbook + finalized-base ZIP + audit"),
         ("DEAL ALLOCATION", "Dealmaker", "Output: Production review ZIP"),
         ("LAYOUT MATCHING", "Layout Stock Matcher", "Output: Salesperson layout suggestions ZIP"),
         ("DEMAND RULES", "Demand Filter Mapper", "Output: Salesperson report ZIP"),
@@ -963,65 +963,88 @@ def suggested_page() -> None:
 
 def auto_pricing_page() -> None:
     section_header(
-        "Sales, actions & price intelligence",
+        "Dataset finalization & price intelligence",
         "Auto Pricing",
-        "Upgrade the current stock workbook with historical buyer coverage, weighted 120-day sold rates, action counts, Diff, and pricing Remark using the preserved Auto Pricing logic.",
-        ["Upload stock + sales", "Add action files", "Run preserved calculations", "Download both workbooks"],
+        "Run the supplied Dataset Finalizer + Auto Pricing v4.1.3 flow: refresh the finalized action/sales/stock bases from RAW data, then rebuild the formatted Auto Pricing workbook from the current processed bases.",
+        ["Upload RAW + previous bases", "Add Auto Pricing template", "Finalize datasets", "Download workbook + audit"],
     )
 
     st.caption(
-        "The original calculation code is preserved. The app only redirects its desktop file paths into temporary processing files. "
-        "The final ZIP contains the same two business outputs: Auto pricing revision.xlsx and Cross_Verify_Sales_Actions.xlsx."
+        "Auto Pricing now uses the supplied v4.1.3 logic. Production processing date is automatically the current Asia/Kolkata date. "
+        "The download ZIP contains the rebuilt Auto Pricing workbook, the clean finalized-base ZIP, Processing_Audit.xlsx, and processing_report.json."
     )
 
     left, middle, right = st.columns(3)
     with left:
-        stock = st.file_uploader("Stock file *", type=["xlsx"], key="auto_pricing_stock")
+        raw_zip = st.file_uploader(
+            "RAW data ZIP *",
+            type=["zip"],
+            key="auto_pricing_raw_zip",
+            help="ZIP containing the current RAW Cart, Hold, Offer, View, Wishlist, Sales, and Stock XLSX exports expected by v4.1.3.",
+        )
     with middle:
-        sales_180 = st.file_uploader("180-day Sales file *", type=["xlsx"], key="auto_pricing_sales_180")
+        previous_final_zip = st.file_uploader(
+            "Previous finalized-base ZIP *",
+            type=["zip"],
+            key="auto_pricing_previous_final_zip",
+            help="ZIP containing the previous finalized Cart, Hold, Offer, View, Wishlist, Stock, sales_120, and sales_180 base workbooks.",
+        )
     with right:
-        sales_120 = st.file_uploader("120-day Sales file *", type=["xlsx"], key="auto_pricing_sales_120")
+        template = st.file_uploader(
+            "Auto Pricing template *",
+            type=["xlsx"],
+            key="auto_pricing_template",
+            help="Existing Auto Pricing workbook used for the Sheet1/Sale_segment/Avg_Rate/Hold/Wishlist/View/Offer/Cart layout and styles.",
+        )
 
-    st.markdown("#### Action files")
+    st.markdown("#### Optional overrides")
     st.caption(
-        "The supplied source defines View, Hold, Offer, Wishlist, Cart, and Media. Each upload is optional; "
-        "when one is omitted its matching/all-count columns remain zero, consistent with the source's missing-file handling."
+        "Remove party.xlsx is authoritative when supplied. Replacement 120-day / 180-day sales-history files are optional and replace the matching files from the previous finalized-base ZIP before processing."
     )
-    action_uploads = {}
-    columns = st.columns(3)
-    for index, action_name in enumerate(AUTO_PRICING_ACTION_NAMES):
-        with columns[index % 3]:
-            action_uploads[action_name] = st.file_uploader(
-                f"{action_name} actions (optional)",
-                type=["xlsx"],
-                key=f"auto_pricing_action_{action_name.lower()}",
-            )
+    opt_left, opt_middle, opt_right = st.columns(3)
+    with opt_left:
+        remove_party = st.file_uploader(
+            "Remove party.xlsx (optional)",
+            type=["xlsx"],
+            key="auto_pricing_remove_party",
+        )
+    with opt_middle:
+        sales_120_history = st.file_uploader(
+            "Replacement sales_120 history (optional)",
+            type=["xlsx"],
+            key="auto_pricing_sales_120_history",
+        )
+    with opt_right:
+        sales_180_history = st.file_uploader(
+            "Replacement sales_180 history (optional)",
+            type=["xlsx"],
+            key="auto_pricing_sales_180_history",
+        )
 
     missing = []
-    if stock is None:
-        missing.append("Stock file")
-    if sales_180 is None:
-        missing.append("180-day Sales file")
-    if sales_120 is None:
-        missing.append("120-day Sales file")
+    if raw_zip is None:
+        missing.append("RAW data ZIP")
+    if previous_final_zip is None:
+        missing.append("Previous finalized-base ZIP")
+    if template is None:
+        missing.append("Auto Pricing template")
 
     if st.button(
-        "Run Auto Pricing",
+        "Run Auto Pricing v4.1.3",
         type="primary",
         use_container_width=True,
         disabled=bool(missing),
         key="run_auto_pricing",
     ):
         try:
-            with st.spinner("Calculating sales coverage, actions, weighted rates, Diff, and Remark..."):
+            with st.spinner("Finalizing datasets and rebuilding the Auto Pricing workbook..."):
                 data, filename, logs = run_auto_pricing(
-                    stock_bytes=stock.getvalue(),
-                    sales_180_bytes=sales_180.getvalue(),
-                    sales_120_bytes=sales_120.getvalue(),
-                    action_files={
-                        name: uploaded.getvalue() if uploaded is not None else None
-                        for name, uploaded in action_uploads.items()
-                    },
+                    raw_zip_bytes=raw_zip.getvalue(),
+                    previous_final_zip_bytes=previous_final_zip.getvalue(),
+                    template_bytes=template.getvalue(),
+                    remove_party_bytes=remove_party.getvalue() if remove_party else None,
+                    sales_120_history_bytes=sales_120_history.getvalue() if sales_120_history else None,
+                    sales_180_history_bytes=sales_180_history.getvalue() if sales_180_history else None,
                 )
                 _save_result("auto_pricing_result", data, filename, logs)
             st.rerun()
@@ -1030,7 +1053,7 @@ def auto_pricing_page() -> None:
 
     if missing:
         st.info("Complete the following before processing: " + "; ".join(missing))
-    _show_result("auto_pricing_result", "Download Auto Pricing output ZIP")
+    _show_result("auto_pricing_result", "Download Auto Pricing v4.1.3 output ZIP")
 
 
 def dealmaker_page() -> None:

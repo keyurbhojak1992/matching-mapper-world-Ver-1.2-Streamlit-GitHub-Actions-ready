@@ -129,19 +129,18 @@ The assembler aligns batch master columns by header name and recreates the origi
 
 ## Auto Pricing
 
-The source calculation logic is preserved. The Streamlit workspace exposes all source execution inputs:
+The application invokes the supplied Dataset Finalizer + Auto Pricing v4.1.3 package end-to-end. The Streamlit workspace exposes the production inputs from `run_all_v4_1_3.py`:
 
-- Stock file (required)
-- 180-day Sales file (required)
-- 120-day Sales file (required)
-- View action file
-- Hold action file
-- Offer action file
-- Wishlist action file
-- Cart action file
-- Media action file
+- RAW data ZIP (required)
+- Previous finalized-base ZIP (required)
+- Auto Pricing template workbook (required)
+- `Remove party.xlsx` (optional; authoritative when supplied)
+- Replacement `sales_120` history workbook (optional)
+- Replacement `sales_180` history workbook (optional)
 
-The six action keys are retained even if an optional action workbook is omitted, so the source-defined count columns still exist with zero values. Only the two original hard-coded Windows output paths are redirected to temporary application files.
+The v4.1.3 processor refreshes Cart/Hold/Offer/View/Wishlist history, reconciles 120/180-day Sales, rebuilds the current Stock base, writes `Processing_Audit.xlsx`, and then rebuilds the formatted Auto Pricing workbook from those processed bases. The live UI does not expose the regression-only `--test-date`; production runs use the current Asia/Kolkata date exactly as defined by the supplied package.
+
+The app packages the principal v4.1.3 outputs into one download ZIP: the final Auto Pricing workbook, `Final_Base_Output_*_v4_1_3.zip`, `Processing_Audit.xlsx`, and `processing_report.json`.
 
 ## Dealmaker v8.2.2
 
