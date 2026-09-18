@@ -1842,7 +1842,12 @@ def bid_drop_page() -> None:
             "MASTER_CONSOLIDATED_REPORT workbook *", type=["xlsx"], key="bid_drop_suggested"
         )
         bids = st.file_uploader("BID workbook *", type=["xlsx"], key="bid_drop_bids")
-        sales = st.file_uploader("Sales & Actions workbook *", type=["xlsx"], key="bid_drop_sales")
+        sales = st.file_uploader(
+            "Sales & Actions workbook(s) *",
+            type=["xlsx"],
+            accept_multiple_files=True,
+            key="bid_drop_sales",
+        )
     with right:
         stock = st.file_uploader("Stock Actual workbook *", type=["xlsx"], key="bid_drop_stock")
         filters = st.file_uploader(
@@ -1861,8 +1866,8 @@ def bid_drop_page() -> None:
         missing.append("MASTER_CONSOLIDATED_REPORT")
     if bids is None:
         missing.append("BID workbook")
-    if sales is None:
-        missing.append("Sales & Actions workbook")
+    if not sales:
+        missing.append("at least one Sales & Actions workbook")
     if stock is None:
         missing.append("Stock Actual workbook")
     if filters is None and not _repository_default_exists("filters"):
@@ -1881,10 +1886,10 @@ def bid_drop_page() -> None:
                 data, filename, logs = run_bid_drop_checking(
                     suggested_bytes=suggested.getvalue(),
                     bids_bytes=bids.getvalue(),
-                    sales_bytes=sales.getvalue(),
                     stock_bytes=stock.getvalue(),
                     filter_bytes=filters.getvalue() if filters else None,
                     no_need_bytes=no_need.getvalue() if no_need else None,
+                    sales_files=[(uploaded.name, uploaded.getvalue()) for uploaded in sales],
                 )
                 _save_result(
                     "bid_drop_result",

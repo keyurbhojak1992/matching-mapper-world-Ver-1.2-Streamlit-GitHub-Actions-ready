@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import gc
+import io
 import shutil
 import sys
+from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
+
+import pandas as pd
 
 from .common import (
     MASTER_CODE_DIR,
@@ -34,20 +38,65 @@ def _materialize_rule_file(
     return destination
 
 
+def _materialize_sales_workbook(
+    *,
+    work: Path,
+    sales_bytes: bytes | None = None,
+    sales_files: Iterable[tuple[str, bytes]] = (),
+) -> Path:
+    """Create the single Sales/Actions workbook expected by the preserved master logic.
+
+    A single upload is written byte-for-byte, exactly as before. When multiple XLSX
+    files are supplied, their first worksheets are concatenated row-wise into one
+    workbook while preserving the first-seen column order. The master BID drop
+    process therefore continues to receive one ``sales_path`` and needs no logic
+    changes of its own.
+    """
+    destination = work / "Sales and Actions.xlsx"
+    inputs = list(sales_files)
+
+    # Backward compatibility for existing callers/tests that still pass sales_bytes.
+    if sales_bytes is not None:
+        inputs.insert(0, ("Sales and Actions.xlsx", sales_bytes))
+
+    if not inputs:
+        raise ValueError("At least one Sales & Actions workbook is required.")
+
+    if len(inputs) == 1:
+        return write_bytes(destination, inputs[0][1])
+
+    frames: list[pd.DataFrame] = []
+    for name, data in inputs:
+        try:
+            frames.append(pd.read_excel(io.BytesIO(data)))
+        except Exception as exc:
+            raise ValueError(f"Unable to read Sales & Actions workbook '{name}': {exc}") from exc
+
+    combined = pd.concat(frames, ignore_index=True, sort=False)
+    with pd.ExcelWriter(destination, engine="openpyxl") as writer:
+        combined.to_excel(writer, index=False, sheet_name="Sheet1")
+    return destination
+
+
 def run_bid_drop_checking(
     *,
     suggested_bytes: bytes,
     bids_bytes: bytes,
-    sales_bytes: bytes,
     stock_bytes: bytes,
     filter_bytes: bytes | None,
     no_need_bytes: bytes | None,
+    sales_bytes: bytes | None = None,
+    sales_files: Iterable[tuple[str, bytes]] = (),
 ) -> tuple[bytes, str, str]:
     """Run the preserved BID drop diagnostic with upload/default file handling."""
     with temp_workspace("matching_mapper_bid_drop_") as work:
         suggested_path = write_bytes(work / "MASTER_CONSOLIDATED_REPORT.xlsx", suggested_bytes)
         bids_path = write_bytes(work / "bids.xlsx", bids_bytes)
-        sales_path = write_bytes(work / "Sales and Actions.xlsx", sales_bytes)
+        sales_path = _materialize_sales_workbook(
+            work=work,
+            sales_bytes=sales_bytes,
+            sales_files=sales_files,
+        )
         stock_path = write_bytes(work / "Stock Actual.xlsx", stock_bytes)
         filters_path = _materialize_rule_file(
             work=work,
