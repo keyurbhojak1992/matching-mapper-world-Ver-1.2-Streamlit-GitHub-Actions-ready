@@ -133,9 +133,9 @@ def process_stock_upgrade(stock_file, sales_180_file, sales_120_file, action_fil
 
             for col in df_action.columns:
                 clean_col = str(col).lower().replace(' ', '').replace('_', '')
-                if clean_col in ['soldparty', 'party', 'PARTY_NAME', 'PARTY_COMPANY_NAME']:
+                if clean_col in ['soldparty', 'party', 'partyname', 'partycompanyname']:
                     action_party_col = col
-                elif clean_col in ['serialno', 'stoneid', 'stockno', 'id', 'STONE_ID']:
+                elif clean_col in ['serialno', 'stoneid', 'stockno', 'id']:
                     action_serial_col = col
 
             if not action_party_col or not action_serial_col:

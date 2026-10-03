@@ -219,8 +219,8 @@ def process_stock_upgrade(
                 if clean_col in [
                     'soldparty',
                     'party',
-                    'PARTY_NAME',
-                    'PARTY_COMPANY_NAME'
+                    'partyname',
+                    'partycompanyname'
                 ]:
                     action_party_col = col
 
@@ -228,8 +228,7 @@ def process_stock_upgrade(
                     'serialno',
                     'stoneid',
                     'stockno',
-                    'id',
-                    'STONE_ID'
+                    'id'
                 ]:
                     action_serial_col = col
 

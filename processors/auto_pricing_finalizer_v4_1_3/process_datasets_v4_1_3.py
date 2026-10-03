@@ -15,7 +15,7 @@ import os
 from difflib import SequenceMatcher
 from openpyxl.styles.numbers import is_date_format
 
-VERSION = '4.1.4'
+VERSION = '4.1.6'
 RAW_DIR = Path(os.environ.get('RAW_DATA_DIR', '/mnt/data/raw_inputs'))
 FINAL_DIR = Path(os.environ.get('FINAL_HISTORY_DIR', '/mnt/data/final_samples'))
 OUT_DIR = Path(os.environ.get('OUTPUT_DIR', '/mnt/data/output_final'))
@@ -154,6 +154,7 @@ ASHWIN BHAI   SHANKAR
 CONTROL_RE = re.compile(r'[\x00-\x1f]')
 SPACE_RE = re.compile(r' +')
 DERIVED_COLUMNS = {'Carat_Grp', 'Amt', 'Tag'}
+OPTIONAL_SALES_RAW_COLUMNS = {'SPer'}  # not used by Auto Pricing calculations; preserve history when RAW omits it
 STOCK_FINAL_HEADERS = ['Serial No', 'Shp', 'Carat', 'Carat_Grp', 'Color name', 'Qua', 'Cut', 'Pol', 'Sym', 'Lab', 'Flo', 'GRap', 'GPer', 'Expected', 'Tag']
 LEGACY_FINAL_COLUMNS = {'date'}  # Obsolete helper column; never used for current-date/window logic.
 MAPPING_FILE = Path(os.environ.get('COLUMN_MAPPING_FILE', str(Path(__file__).with_name('column_mapping_aliases.json'))))
@@ -367,8 +368,8 @@ def read_final_headers(path: Path):
     return [h for h in read_headers(path) if norm_header(h) not in LEGACY_FINAL_COLUMNS]
 
 
-def rows_as_dicts(path: Path):
-    wb = load_workbook(path, read_only=True, data_only=False)
+def rows_as_dicts(path: Path, data_only: bool = False):
+    wb = load_workbook(path, read_only=True, data_only=data_only)
     ws = wb[wb.sheetnames[0]]
     it = ws.iter_rows(values_only=True)
     header_row = next(it)
@@ -609,10 +610,12 @@ def resolve_sales_mapping(raw_path: Path, final_headers: list[str] | None = None
                          'Raw Columns Found': chosen, 'Status': 'OK', 'Rule': 'Alternate header normalized to canonical final name',
                          'Mapping Method': method, 'Confidence': round(confidence, 4)})
         else:
+            optional = target in OPTIONAL_SALES_RAW_COLUMNS
             rows.append({'Dataset': 'Sales', 'Final Column': target, 'Candidate Raw Columns': ' | '.join(candidates_for('Sales', target)),
-                         'Raw Columns Found': '', 'Status': 'MISSING',
-                         'Rule': 'No safe exact/semantic/fuzzy mapping found; processor fails rather than guessing',
-                         'Mapping Method': 'MISSING', 'Confidence': 0.0})
+                         'Raw Columns Found': '', 'Status': 'OPTIONAL_MISSING' if optional else 'MISSING',
+                         'Rule': ('Optional RAW field not supplied; preserve previous-history value on overlaps and leave blank on new rows'
+                                  if optional else 'No safe exact/semantic/fuzzy mapping found; processor fails rather than guessing'),
+                         'Mapping Method': 'OPTIONAL_MISSING' if optional else 'MISSING', 'Confidence': 0.0})
 
     # Preserve canonical final column order in audit.
     order = {h: i for i, h in enumerate(final_headers)}
@@ -1181,6 +1184,10 @@ def process_sales(raw_path: Path, final120: Path, final180: Path, audit=None):
     audit['mapping'].extend(mapping_rows)
 
     missing = [m for m in mapping_rows if m['Status'] == 'MISSING' and m['Final Column'] not in DERIVED_COLUMNS]
+    optional_missing = [m for m in mapping_rows if m['Status'] == 'OPTIONAL_MISSING']
+    for m in optional_missing:
+        add_issue(audit, dataset, 'INFO', 'Optional Sales source column not supplied', source_label(raw_path), column=m['Final Column'],
+                  details='This field is not required for Auto Pricing metrics. Previous-history values are preserved on exact overlaps; new transactions keep it blank.')
     for m in missing:
         add_issue(audit, dataset, 'ERROR', 'Missing required Sales source column', source_label(raw_path), column=m['Final Column'],
                   details=f"No raw source found. Candidates: {m['Candidate Raw Columns']}")
@@ -1327,7 +1334,10 @@ def process_sales(raw_path: Path, final120: Path, final180: Path, audit=None):
                 history_preserved.append(hrec)
                 continue
             upd = dict(hrec)
-            upd['SPer'] = rr.get('SPer')
+            # SPer is optional in current Sales RAW exports. Never erase a valid
+            # historical discount when the latest RAW does not provide it.
+            if not is_blank(rr.get('SPer')):
+                upd['SPer'] = rr.get('SPer')
             upd['SRate'] = rr.get('SRate')
             normalize_lab_flo(upd)
             enrich_sales_derived(upd)
@@ -1368,7 +1378,7 @@ def process_sales(raw_path: Path, final120: Path, final180: Path, audit=None):
             'Output File': out_name,
             'Raw File': source_label(raw_path),
             'Previous Final File': history_path.name,
-            'Source Rule': 'Previous Sales input remains the descriptive base. Current RAW updates SPer/SRate on exact Serial No + Sale Date overlaps; new RAW transactions are appended. Exact full-row duplicates are removed.',
+            'Source Rule': 'Previous Sales input remains the descriptive base. Current RAW updates SRate and updates SPer only when supplied on exact Serial No + Sale Date overlaps; new RAW transactions are appended. Exact full-row duplicates are removed.',
             'Window Rule': f'{days}-day window; anchor=today when current-day log exists, otherwise yesterday',
             'Date Field': 'Sale Date',
             'Processing Date': today.isoformat(),
@@ -1411,12 +1421,19 @@ def process_stock(raw_path: Path, out_name='Stock file.xlsx', audit=None):
         if m['Status'] == 'MISSING' and m['Final Column'] not in DERIVED_COLUMNS:
             add_issue(audit, dataset, 'ERROR', 'Missing source column', source_label(raw_path), column=m['Final Column'],
                       details=f"No raw source found. Candidates: {m['Candidate Raw Columns']}")
+    # Stock Expected is frequently an Excel formula. If that formula is copied into a
+    # newly written workbook, openpyxl cannot carry Excel's cached result and downstream
+    # data_only readers see a blank. Read the source workbook a second time with
+    # data_only=True so the original cached numeric Expected value is preserved.
+    cached_rows = {source_row: row for source_row, row in rows_as_dicts(raw_path, data_only=True)}
+
     records = []
     raw_rows = 0
     nondata_rows_removed = 0
     for source_row, row in rows_as_dicts(raw_path):
         raw_rows += 1
         rec, _ = map_row(row, dataset, headers)
+        cached_rec, _ = map_row(cached_rows.get(source_row, {}), dataset, headers)
         rec['Serial No'] = serial_normalize(rec.get('Serial No'))
         # Some Stock exports append a footer/count row with only Serial No populated.
         # Treat that as non-data rather than a stone record.
@@ -1431,7 +1448,28 @@ def process_stock(raw_path: Path, out_name='Stock file.xlsx', audit=None):
         rec['Carat'] = number_normalize(rec.get('Carat'))
         rec['GRap'] = number_normalize(rec.get('GRap'))
         rec['GPer'] = number_normalize(rec.get('GPer'))
-        rec['Expected'] = number_normalize(rec.get('Expected'))
+
+        # Prefer the source workbook's cached numeric Expected result when the visible
+        # cell is a formula. This keeps the processed base fully value-based, which is
+        # required because the Auto Pricing builder reads with data_only=True.
+        expected_raw = rec.get('Expected')
+        expected_cached = cached_rec.get('Expected')
+        if isinstance(expected_raw, str) and expected_raw.lstrip().startswith('='):
+            rec['Expected'] = number_normalize(expected_cached)
+        else:
+            rec['Expected'] = number_normalize(expected_raw)
+
+        # Defensive fallback for formula workbooks whose cached values were stripped by
+        # an upstream export. Current Stock business formula is:
+        # GRap * (100 - (GPer + 5))% * (100 - 10)%.
+        if is_blank(rec.get('Expected')) and not is_blank(rec.get('GRap')) and not is_blank(rec.get('GPer')):
+            try:
+                rec['Expected'] = float(rec['GRap']) * ((100.0 - (float(rec['GPer']) + 5.0)) / 100.0) * 0.90
+                add_issue(audit, dataset, 'WARNING', 'Expected cache missing; value recalculated', source_label(raw_path), source_row,
+                          key=f"Serial No={rec.get('Serial No')}", column='Expected', raw_value=expected_raw,
+                          details='The Excel formula had no cached result, so Expected was recalculated from GRap/GPer using the current Stock business formula.')
+            except Exception:
+                pass
         enrich_stock_derived(rec)
         rec['_source_row'] = source_row
         records.append(rec)
@@ -1454,7 +1492,7 @@ def process_stock(raw_path: Path, out_name='Stock file.xlsx', audit=None):
     status = 'PASS' if all(m['Status'] != 'MISSING' or m['Final Column'] in DERIVED_COLUMNS for m in mapping_rows) else 'FAILED'
     summary = {
         'Dataset': dataset, 'Output File': out_name, 'Raw File': source_label(raw_path),
-        'Previous Final File': '', 'Source Rule': 'RAW Stock only; no previous Stock file required; no history merge; no deduplication',
+        'Previous Final File': '', 'Source Rule': 'RAW Stock only; no previous Stock file required; formula-backed Expected values are materialized from source cached values; no history merge.',
         'Window Rule': 'Current snapshot', 'Date Field': '', 'Processing Date': processing_date().isoformat(), 'Anchor Date': '', 'Cutoff Date': '',
         'History Rows': 'Not used', 'History Invalid Dates': 'Not used', 'Latest History Timestamp': 'Not used',
         'Raw Rows Read': raw_rows, 'Raw Valid Dates': '', 'Raw Invalid Dates': 0, 'Raw New Rows Appended': 'All valid raw rows are source',
@@ -1567,8 +1605,8 @@ def main():
             'Cart/Offer/Wishlist': 'Previous final preserved before its last calendar date; if RAW contains that date, replace the entire boundary date from RAW; otherwise append after latest timestamp; 90-day window; exact full-row duplicates removed',
             'View': 'Previous final preserved before boundary date; boundary date refreshed from RAW; STONE_ID kept as one SERIAL_NO value; blank/0 removed; processing-date 90-day window; exact full-row duplicates removed',
             'Hold': 'Same whole-boundary-date refresh rule; SERIAL_NO comes from RAW SERIAL_NO; 90-day window from processing date; exact full-row duplicates removed',
-            'Sales': 'Sales 120/180 input files carry descriptive history. Current RAW updates SPer/SRate on exact Serial No + Sale Date overlaps and appends new transactions. Blank Lab/Flo become NON.',
-            'Stock': 'RAW Stock only; no previous Stock file required; canonical output headers are built into the processor; exact full-row duplicates are removed',
+            'Sales': 'Sales 120/180 input files carry descriptive history. Current RAW updates SRate and updates SPer only when supplied on exact Serial No + Sale Date overlaps; new transactions append. Blank Lab/Flo become NON.',
+            'Stock': 'RAW Stock only; no previous Stock file required; canonical output headers are built into the processor; formula-backed Expected is materialized as a numeric value from the source cache (with a GRap/GPer fallback); exact full-row duplicates are removed',
             'Duplicate Cleaning': 'Only fully identical output rows are removed after merge/window processing. Similar or repeated activity with any differing field is retained.',
             'Derived Fields': 'Sales Carat_Grp/Amt and Stock Carat_Grp/Tag are computed in Python and written as values; blank Lab/Flo become NON; downstream logic does not depend on Excel cached formulas.',
         },

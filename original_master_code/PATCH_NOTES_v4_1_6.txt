@@ -1,0 +1,38 @@
+Auto Pricing drop-in backend patch v4.1.6
+Prepared against the files supplied for the 02-Oct-2026 run.
+
+WHAT WAS FAILING
+1) The uploaded SALE_DATA_02-10-2026-02-37-19_New.xlsx has no SPer / SALE_PER column.
+   The previous processor treated SPer as mandatory, so both Sales 120 and Sales 180 failed before output.
+2) The current Stock export stores Expected as an Excel formula. The old processor copied the formula into a new workbook.
+   Because openpyxl cannot carry Excel's cached formula result into a newly written workbook, the downstream builder (data_only=True)
+   read Expected as blank. That would make Diff/Remark wrong even after the Sales error was fixed.
+3) The standalone Auto_Pricing.py/TXT header normalizer lower-cases headers but compared against uppercase PARTY_NAME / STONE_ID strings.
+
+FIXES
+- SPer is now optional for raw Sales.
+- On an exact Sales overlap, an existing historical SPer is preserved if the current raw export does not provide SPer.
+- New Sales rows can have blank SPer. SPer is not used in Auto Pricing weighted-average calculations.
+- SRate remains required and Amt is still recalculated as SRate x Carat.
+- Stock Expected formula values are materialized from the source workbook's cached numeric values before writing the prepared Stock file.
+- If an Expected formula has no cached value, a guarded fallback uses the current stock rule:
+  GRap * (100 - (GPer + 5))% * (100 - 10)%.
+- Standalone action header matching now correctly recognizes partyname/partycompanyname and stoneid after normalization.
+
+VALIDATION ON THE SUPPLIED 02-Oct-2026 FILES
+- Sales raw rows read: 623
+- Sales exact overlaps with previous history: 142
+- Sales new transactions appended: 481
+- Sales 120: PASS, 12,418 output rows, 1 exact duplicate removed
+- Sales 180: PASS, 18,998 output rows, 1 exact duplicate removed
+- Stock: PASS, 16,027 output rows
+- Stock Expected numeric values preserved: 16,027 / 16,027
+
+IMPORTANT MANUAL-WORKBOOK FINDING
+The attached manual 02-Oct workbook is useful as a calculation reference, but it should not be treated as a row-for-row gold copy for the new Sales upload.
+Example: raw Sales serial 602680 has LAB_NAME=GIA and GFL_NAME=FNT. The manual Avg_Rate sheet shows Lab=FNT and Flo=GIA, i.e. those two fields are swapped.
+The patched app keeps the semantic mapping LAB_NAME -> Lab and GFL_NAME -> Flo. This is intentional because Tag depends on Lab/Flo.
+
+DROP-IN USE
+This ZIP intentionally keeps the original folder/file names (auto_pricing_finalizer_v4_1_3/process_datasets_v4_1_3.py)
+so existing app imports do not need to change. The processor's internal VERSION is 4.1.6.

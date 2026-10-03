@@ -1,4 +1,4 @@
-Dataset Finalizer + Auto Pricing Output v4.1.3
+Dataset Finalizer + Auto Pricing Output v4.1.6
 
 FINALIZED RULES
 1. Production date is automatic Asia/Kolkata current date. TEST_PROCESSING_DATE / --test-date exists only for regression.
@@ -18,11 +18,11 @@ FINALIZED RULES
 5. Sales 120/180:
    - supplied previous Sales files remain descriptive history;
    - transaction identity = Serial No + Sale Date;
-   - exact RAW overlap updates SPer and SRate only (Amt is recalculated as SRate x Carat);
-   - new RAW transactions append;
+   - exact RAW overlap updates SRate and updates SPer only when the RAW export supplies SPer (Amt is recalculated as SRate x Carat);
+   - new RAW transactions append; when SPer is absent in RAW it is left blank because SPer is not used by Auto Pricing metrics;
    - removal-party filtering applies to RAW and carried history.
 6. Blank Lab or Flo becomes NON.
-7. Stock is current RAW snapshot. Serial-only export footer/non-data rows are removed.
+7. Stock is current RAW snapshot. Serial-only export footer/non-data rows are removed. Formula-backed Expected values are materialized to numeric values from the source workbook cache, with a GRap/GPer formula fallback if the cache is unavailable.
 8. SALE_PERSON is preserved as source/history data and is not used as a reconciliation criterion.
 9. Exact row deduplication is still deferred. v4.1.3 audits duplicates but does not delete them.
 10. Auto Pricing formatted workbook is rebuilt from the processed bases. Sheet1 metrics are recalculated from current bases (not copied from old static values):
