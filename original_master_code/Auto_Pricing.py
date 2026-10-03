@@ -50,6 +50,9 @@ def ensure_tag_column(df, filename):
                 f"(or 'Carat_Grp', 'Color name', etc.) and run again.\n"
             )
 
+        for _c in ['Lab', 'Flo']:
+            df[_c] = df[_c].fillna('NON').astype(str).str.strip().replace('', 'NON')
+
         df['Tag'] = (
             df['Shp'].astype(str) + '-' +
             df['Carat_Grp'].astype(str) + '-' +

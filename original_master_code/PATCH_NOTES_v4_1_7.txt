@@ -1,0 +1,33 @@
+Auto Pricing drop-in backend patch v4.1.7
+Prepared and regression-checked on the supplied 02-Oct-2026 files and revised Jupyter output.
+
+FINAL CORRECTIONS
+1) Sales boundary refresh
+- Previous Sales history before the previous file's latest Sale Date is preserved.
+- When current RAW contains that same boundary date, the entire boundary date is replaced from RAW and later RAW dates are appended.
+- Exact full-row duplicate removal remains enabled.
+- On the 02-Oct test this produces 12,235 rows (120-day) and 18,815 rows (180-day).
+- Revised Jupyter has one extra exact duplicate transaction (Serial 503279), so its counts are 12,236 / 18,816. Apart from that duplicate, Sales transaction identities/Tags align.
+
+2) View / Appointment
+- STONE_ID values containing multiple comma/semicolon-separated stones are split into individual SERIAL_NO rows.
+- APPOINTMENT_DATE is now authoritative for the boundary refresh and 90-day window.
+- Blank/0 serials are removed.
+- Exact full-row duplicates remain removed.
+- On the 02-Oct test the prepared View has 26,406 rows versus revised Jupyter 26,473; the 67-row difference is 66 exact duplicate rows plus 1 blank/zero stone row retained in Jupyter.
+- Unique nonblank Serial+Party relationships match revised Jupyter exactly.
+
+3) Blank Lab -> NON
+- Blank Lab/Flo are normalized to NON before Tag construction.
+- In the supplied Stock file, all 125 blank Lab cells become NON.
+- Final prepared Stock has 16,027 rows, 0 blank Lab cells, and 16,027 populated Expected values.
+
+UNCHANGED / RETAINED
+- Correct LAB_NAME -> Lab and GFL_NAME -> Flo mapping.
+- SPer remains optional in current Sales RAW.
+- SRate remains required; Amt = SRate x Carat.
+- Stock Expected formulas are materialized to numeric values.
+- Hold/Wishlist/Offer/Cart keep the validated v4.1.6 merge/dedup rules.
+
+DROP-IN
+Internal folder/module names are unchanged so existing app imports remain compatible. Processor VERSION = 4.1.7.

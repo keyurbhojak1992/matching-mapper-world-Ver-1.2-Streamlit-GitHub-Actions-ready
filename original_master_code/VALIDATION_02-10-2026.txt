@@ -1,19 +1,20 @@
-02-Oct-2026 validation summary
+v4.1.7 regression validation - 02-Oct-2026
 
-Original Processing_Check_App_Base.xlsx:
-- Cart: PASS
-- Hold: PASS
-- Offer: PASS
-- View: PASS
-- Wishlist: PASS
-- Sales 120: FAILED - missing required Sales source column SPer
-- Sales 180: FAILED - missing required Sales source column SPer
-- Stock: PASS at validation stage, but downstream Expected values would become blank after rewrite because the source Expected cells are formulas.
+Sales 120: PASS - 12,235 rows
+Sales 180: PASS - 18,815 rows
+Revised Jupyter comparison: exactly one additional Jupyter duplicate (Serial 503279); otherwise Sales identity/Tag population aligns.
 
-Patched v4.1.6 focused regression:
-- Sales 120: PASS, 12,418 rows
-- Sales 180: PASS, 18,998 rows
-- Stock: PASS, 16,027 rows; Expected is numeric in every output row
+View: PASS - 26,406 rows
+Revised Jupyter View: 26,473 rows. Difference = 66 exact duplicates + 1 blank/zero stone row intentionally removed.
+Unique nonblank Serial No + Sold Party relationships: exact match.
 
-Manual reference warning:
-The manual Auto pricing revision 02-10-2026 workbook has Lab/Flo reversed on newly added raw Sales rows (e.g. serial 602680), so some Tag-based averages/counts differ from the corrected app output by design.
+Stock: PASS - 16,027 rows
+Blank Lab cells after preparation: 0
+Lab=NON rows: 125
+Expected populated: 16,027 / 16,027
+
+Business rules finalized in this patch:
+- blank Lab/Flo -> NON
+- Sales whole-boundary-date refresh
+- View STONE_ID explode + APPOINTMENT_DATE window
+- exact duplicate removal retained

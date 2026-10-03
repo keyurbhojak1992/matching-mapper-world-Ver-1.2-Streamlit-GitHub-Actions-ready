@@ -15,7 +15,7 @@ import os
 from difflib import SequenceMatcher
 from openpyxl.styles.numbers import is_date_format
 
-VERSION = '4.1.6'
+VERSION = '4.1.7'
 RAW_DIR = Path(os.environ.get('RAW_DATA_DIR', '/mnt/data/raw_inputs'))
 FINAL_DIR = Path(os.environ.get('FINAL_HISTORY_DIR', '/mnt/data/final_samples'))
 OUT_DIR = Path(os.environ.get('OUTPUT_DIR', '/mnt/data/output_final'))
@@ -960,8 +960,28 @@ def process_history_log(dataset: str, raw_path: Path, history_path: Path, out_na
     audit['summary'].append(summary)
     return summary, status == 'PASS'
 
+def _split_view_serials(value):
+    """Explode a View STONE_ID/SERIAL_NO cell into individual stone serials."""
+    if is_blank(value):
+        return []
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        one = serial_normalize(value)
+        return [] if one in (None, '', 0, '0', '0.0') else [one]
+    text = clean_text(str(value))
+    if not text:
+        return []
+    out = []
+    for part in re.split(r'[,;\r\n]+', text):
+        serial = serial_normalize(part)
+        if serial in (None, '', 0, '0', '0.0'):
+            continue
+        out.append(serial)
+    return out
+
+
 def process_view(raw_path: Path, history_path: Path, out_name='View.xlsx', audit=None):
     dataset = 'View'
+    date_col = 'APPOINTMENT_DATE'
     headers = read_final_headers(history_path)
     raw_headers = read_headers(raw_path)
     mapping_rows = schema_mapping(dataset, headers, raw_headers)
@@ -971,7 +991,8 @@ def process_view(raw_path: Path, history_path: Path, out_name='View.xlsx', audit
             add_issue(audit, dataset, 'ERROR', 'Missing source column', source_label(raw_path), column=m['Final Column'],
                       details=f"No raw source found. Candidates: {m['Candidate Raw Columns']}")
 
-    history, history_invalid, history_blacklist = read_history(dataset, history_path, headers, 'CREATED_DATETIME', audit)
+    # View aging and boundary refresh follow the appointment date, not the row-created timestamp.
+    history, history_invalid, history_blacklist = read_history(dataset, history_path, headers, date_col, audit)
     history_clean = []
     history_bad_stone = 0
     for rec in history:
@@ -985,36 +1006,44 @@ def process_view(raw_path: Path, history_path: Path, out_name='View.xlsx', audit
         add_issue(audit, dataset, 'WARNING', 'Blank/zero stone rows in previous final removed', history_path.name,
                   details=f'{history_bad_stone} historical row(s) had blank/0 SERIAL_NO and were excluded.')
     if history_invalid:
-        summary = make_failed_summary(dataset, out_name, raw_path, history_path, 'CREATED_DATETIME', f'{history_invalid} invalid history date row(s)')
+        summary = make_failed_summary(dataset, out_name, raw_path, history_path, date_col, f'{history_invalid} invalid history date row(s)')
         audit['summary'].append(summary)
         return summary, False
 
-    history_max = max((r['CREATED_DATETIME'] for r in history), default=None)
+    history_max = max((r[date_col] for r in history), default=None)
     raw_rows = raw_invalid = blacklist_removed = blank_zero = 0
+    multi_stone_rows = expanded_stone_records = 0
     valid_raw = []
     invalid_samples = 0
     for source_row, row in rows_as_dicts(raw_path):
         raw_rows += 1
         rec, _ = map_row(row, dataset, headers)
-        rec['SERIAL_NO'] = serial_normalize(rec.get('SERIAL_NO'))
-        if rec.get('SERIAL_NO') in (None, '', 0, '0', '0.0'):
-            blank_zero += 1
-            continue
-        dt = parse_datetime(rec.get('CREATED_DATETIME'))
-        if dt is None:
+        appointment_dt = parse_datetime(rec.get(date_col))
+        if appointment_dt is None:
             raw_invalid += 1
             if invalid_samples < 25:
-                add_issue(audit, dataset, 'ERROR', 'Invalid raw date', source_label(raw_path), source_row,
-                          column='CREATED_DATETIME', raw_value=rec.get('CREATED_DATETIME'),
-                          details='Raw View row excluded because date cannot be parsed.')
+                add_issue(audit, dataset, 'ERROR', 'Invalid raw appointment date', source_label(raw_path), source_row,
+                          column=date_col, raw_value=rec.get(date_col),
+                          details='Raw View row excluded because APPOINTMENT_DATE cannot be parsed.')
                 invalid_samples += 1
             continue
-        rec['CREATED_DATETIME'] = dt
-        rec['_source_row'] = source_row
+        rec[date_col] = appointment_dt
         if party_rejected(rec):
             blacklist_removed += 1
             continue
-        valid_raw.append(rec)
+
+        serials = _split_view_serials(rec.get('SERIAL_NO'))
+        if not serials:
+            blank_zero += 1
+            continue
+        if len(serials) > 1:
+            multi_stone_rows += 1
+            expanded_stone_records += len(serials)
+        for serial in serials:
+            one = dict(rec)
+            one['SERIAL_NO'] = serial
+            one['_source_row'] = source_row
+            valid_raw.append(one)
 
     carried_history = history
     appended = []
@@ -1024,16 +1053,16 @@ def process_view(raw_path: Path, history_path: Path, out_name='View.xlsx', audit
         appended = valid_raw
     else:
         boundary_date = history_max.date()
-        has_boundary_raw = any(r['CREATED_DATETIME'].date() == boundary_date for r in valid_raw)
+        has_boundary_raw = any(r[date_col].date() == boundary_date for r in valid_raw)
         if has_boundary_raw:
-            boundary_history_removed = sum(1 for r in history if r['CREATED_DATETIME'].date() == boundary_date)
-            carried_history = [r for r in history if r['CREATED_DATETIME'].date() < boundary_date]
-            appended = [r for r in valid_raw if r['CREATED_DATETIME'].date() >= boundary_date]
+            boundary_history_removed = sum(1 for r in history if r[date_col].date() == boundary_date)
+            carried_history = [r for r in history if r[date_col].date() < boundary_date]
+            appended = [r for r in valid_raw if r[date_col].date() >= boundary_date]
             raw_old = len(valid_raw) - len(appended)
-            add_issue(audit, dataset, 'INFO', 'Boundary date refreshed from RAW', source_label(raw_path),
-                      details=f'Previous-final rows dated {boundary_date} were replaced by current RAW View rows for that date. STONE_ID is kept as one SERIAL_NO value; it is not split.')
+            add_issue(audit, dataset, 'INFO', 'Boundary appointment date refreshed from RAW', source_label(raw_path),
+                      details=f'Previous-final rows with APPOINTMENT_DATE {boundary_date} were replaced by current RAW View rows for that date; comma-separated STONE_ID values were split to individual stones.')
         else:
-            appended = [r for r in valid_raw if r['CREATED_DATETIME'] > history_max]
+            appended = [r for r in valid_raw if r[date_col] > history_max]
             raw_old = len(valid_raw) - len(appended)
 
     today = processing_date()
@@ -1043,36 +1072,44 @@ def process_view(raw_path: Path, history_path: Path, out_name='View.xlsx', audit
     before = after = 0
     filtered = []
     for rec in combined:
-        d = rec['CREATED_DATETIME'].date()
-        if d < cutoff: before += 1
-        elif d > anchor: after += 1
-        else: filtered.append(rec)
-    filtered.sort(key=lambda r: (r['CREATED_DATETIME'], r.get('_source_row', 0), str(r.get('SERIAL_NO') or '')))
+        d = rec[date_col].date()
+        if d < cutoff:
+            before += 1
+        elif d > anchor:
+            after += 1
+        else:
+            filtered.append(rec)
+
+    def view_sort_key(r):
+        created = parse_datetime(r.get('CREATED_DATETIME')) or datetime.min
+        return (r[date_col], created, r.get('_source_row', 0), str(r.get('SERIAL_NO') or ''))
+    filtered.sort(key=view_sort_key)
 
     filtered, exact_duplicates_removed = remove_exact_output_duplicates(filtered, headers)
     if exact_duplicates_removed:
         add_issue(audit, dataset, 'INFO', 'Exact duplicate rows removed',
                   details=f'{exact_duplicates_removed} fully identical View row(s) were removed; the first occurrence was retained.')
 
-    keys = Counter((str(r.get('SEQ_NO')), str(r.get('SERIAL_NO')), str(r.get('CREATED_DATETIME'))) for r in filtered)
+    keys = Counter((str(r.get('SEQ_NO')), str(r.get('SERIAL_NO')), str(r.get(date_col))) for r in filtered)
     dups = sum(c - 1 for c in keys.values() if c > 1)
     if dups:
         add_issue(audit, dataset, 'INFO', 'Repeated View activity retained',
-                  details=f'{dups} repeated SEQ_NO + SERIAL_NO + CREATED_DATETIME occurrence(s) remain because another output field differs; these are not exact duplicate rows.')
+                  details=f'{dups} repeated SEQ_NO + SERIAL_NO + APPOINTMENT_DATE occurrence(s) remain because another output field differs; these are not exact duplicate rows.')
 
     write_standard_output(out_name, headers, filtered)
     audit_blanks(audit, dataset, headers, filtered)
     status = 'PASS' if raw_invalid == 0 and all(m['Status'] != 'MISSING' for m in mapping_rows) else 'FAILED'
     summary = {
         'Dataset': dataset, 'Output File': out_name, 'Raw File': source_label(raw_path), 'Previous Final File': history_path.name,
-        'Source Rule': 'Previous final preserved before latest-history date; boundary date refreshed from RAW when present; later RAW rows appended; STONE_ID kept as one SERIAL_NO value',
-        'Window Rule': '90-day window from processing date; blank/0 SERIAL_NO removed; no STONE_ID split; exact full-row duplicates removed',
-        'Date Field': 'CREATED_DATETIME', 'Processing Date': today.isoformat(), 'Anchor Date': anchor.isoformat(), 'Cutoff Date': cutoff.isoformat(),
+        'Source Rule': 'Previous final preserved before latest APPOINTMENT_DATE; boundary appointment date refreshed from RAW when present; later RAW rows appended; comma/semicolon-separated STONE_ID values split into individual SERIAL_NO rows',
+        'Window Rule': '90-day window from processing date using APPOINTMENT_DATE; blank/0 SERIAL_NO removed; exact full-row duplicates removed',
+        'Date Field': date_col, 'Processing Date': today.isoformat(), 'Anchor Date': anchor.isoformat(), 'Cutoff Date': cutoff.isoformat(),
         'History Rows': len(history), 'History Invalid Dates': history_invalid, 'History Blacklist Removed': history_blacklist, 'Latest History Timestamp': history_max,
         'Raw Rows Read': raw_rows, 'Raw Valid Dates': len(valid_raw), 'Raw Invalid Dates': raw_invalid,
         'Raw New Rows Appended': len(appended), 'Raw Historical/Overlap Rows Skipped': raw_old,
         'Boundary History Rows Replaced': boundary_history_removed,
         'Blacklist Removed From Raw': blacklist_removed, 'Blank/Zero Stone Removed': blank_zero,
+        'Multi-Stone Raw Rows Split': multi_stone_rows, 'Expanded Stone Records From Multi-Stone Rows': expanded_stone_records,
         'Before Cutoff': before, 'After Anchor': after, 'Output Rows': len(filtered), 'Exact Duplicate Rows Removed': exact_duplicates_removed, 'Potential Duplicates Kept': dups, 'Status': status
     }
     audit['summary'].append(summary)
@@ -1319,34 +1356,35 @@ def process_sales(raw_path: Path, final120: Path, final180: Path, audit=None):
             else:
                 raw_window.append(rec)
 
-        # Sales overlap rule: previous input remains the descriptive base.
-        # For an exact Serial No + Sale Date overlap, current RAW updates only SPer/SRate
-        # (and therefore Amt). New RAW transactions are appended with their full mapped values.
-        history_key_set = {sale_key(r) for r in history_window}
-        raw_first = {}
-        for r in raw_window:
-            raw_first.setdefault(sale_key(r), r)
-        history_refreshed = []
-        history_preserved = []
-        for hrec in history_window:
-            rr = raw_first.get(sale_key(hrec))
-            if rr is None:
-                history_preserved.append(hrec)
-                continue
-            upd = dict(hrec)
-            # SPer is optional in current Sales RAW exports. Never erase a valid
-            # historical discount when the latest RAW does not provide it.
-            if not is_blank(rr.get('SPer')):
-                upd['SPer'] = rr.get('SPer')
-            upd['SRate'] = rr.get('SRate')
-            normalize_lab_flo(upd)
-            enrich_sales_derived(upd)
-            history_refreshed.append(upd)
-        raw_overlap_rows = sum(1 for r in raw_window if sale_key(r) in history_key_set)
-        raw_new_records = [r for r in raw_window if sale_key(r) not in history_key_set]
-        raw_new_rows = len(raw_new_records)
+        # Sales boundary-date rule: the latest calendar date in the previous Sales base
+        # is provisional. When current RAW contains that same date, replace that entire
+        # date from RAW and append later RAW dates. This matches the established Jupyter
+        # preparation behavior while still removing exact full-row duplicates afterward.
+        boundary_history_removed = 0
+        raw_overlap_rows = 0
+        if history_max is None:
+            history_preserved = []
+            raw_new_records = list(raw_window)
+        else:
+            boundary_date = history_max.date()
+            has_boundary_raw = any(r['Sale Date'].date() == boundary_date for r in raw_window)
+            if has_boundary_raw:
+                boundary_history_removed = sum(1 for r in history_window if r['Sale Date'].date() == boundary_date)
+                history_preserved = [r for r in history_window if r['Sale Date'].date() < boundary_date]
+                raw_new_records = [r for r in raw_window if r['Sale Date'].date() >= boundary_date]
+                raw_overlap_rows = sum(1 for r in raw_window if r['Sale Date'].date() == boundary_date)
+                add_issue(audit, sales_dataset, 'INFO', 'Boundary Sale Date refreshed from RAW', source_label(raw_path),
+                          details=f'Previous Sales rows dated {boundary_date} were removed and that whole date was rebuilt from current RAW; later RAW sales were appended.')
+            else:
+                history_preserved = list(history_window)
+                raw_new_records = [r for r in raw_window if r['Sale Date'] > history_max]
+                raw_overlap_rows = len(raw_window) - len(raw_new_records)
 
-        final_records = history_preserved + history_refreshed + raw_new_records
+        # Kept for backward-compatible reporting fields. A whole-date refresh replaces
+        # history rather than mutating individual history rows in-place.
+        history_refreshed = []
+        raw_new_rows = len(raw_new_records)
+        final_records = history_preserved + raw_new_records
         def sk(r):
             try: carat = float(r.get('Carat') or -1)
             except Exception: carat = -1
@@ -1378,7 +1416,7 @@ def process_sales(raw_path: Path, final120: Path, final180: Path, audit=None):
             'Output File': out_name,
             'Raw File': source_label(raw_path),
             'Previous Final File': history_path.name,
-            'Source Rule': 'Previous Sales input remains the descriptive base. Current RAW updates SRate and updates SPer only when supplied on exact Serial No + Sale Date overlaps; new RAW transactions are appended. Exact full-row duplicates are removed.',
+            'Source Rule': 'Previous Sales rows before the latest-history calendar date are preserved. If current RAW contains that boundary date, the whole boundary date is replaced from RAW and later RAW dates are appended; otherwise only RAW rows newer than the latest previous timestamp are appended. Exact full-row duplicates are removed.',
             'Window Rule': f'{days}-day window; anchor=today when current-day log exists, otherwise yesterday',
             'Date Field': 'Sale Date',
             'Processing Date': today.isoformat(),
@@ -1389,8 +1427,9 @@ def process_sales(raw_path: Path, final120: Path, final180: Path, audit=None):
             'Latest History Timestamp': history_max,
             'History Blacklist Removed': history_blacklist,
             'History Rows In Window': len(history_window),
-            'History Rows Refreshed By Raw': len(history_refreshed),
+            'History Rows Refreshed By Raw': boundary_history_removed,
             'History Rows Preserved': len(history_preserved),
+            'Boundary History Rows Replaced': boundary_history_removed,
             'Raw Rows Read': raw_rows,
             'Raw Valid Dates': len(raw_records),
             'Raw Invalid Dates': invalid,
@@ -1603,12 +1642,12 @@ def main():
             'Processing Date': 'Production uses actual current date in Asia/Kolkata. TEST_PROCESSING_DATE is accepted only for regression/testing.',
             'Legacy Date Column': 'Obsolete final helper column Date is ignored/removed; it is not required from RAW and is not used for date-window logic',
             'Cart/Offer/Wishlist': 'Previous final preserved before its last calendar date; if RAW contains that date, replace the entire boundary date from RAW; otherwise append after latest timestamp; 90-day window; exact full-row duplicates removed',
-            'View': 'Previous final preserved before boundary date; boundary date refreshed from RAW; STONE_ID kept as one SERIAL_NO value; blank/0 removed; processing-date 90-day window; exact full-row duplicates removed',
+            'View': 'Previous final preserved before the latest APPOINTMENT_DATE; boundary appointment date refreshed from RAW; comma/semicolon-separated STONE_ID values are split to individual SERIAL_NO rows; blank/0 removed; 90-day window uses APPOINTMENT_DATE; exact full-row duplicates removed',
             'Hold': 'Same whole-boundary-date refresh rule; SERIAL_NO comes from RAW SERIAL_NO; 90-day window from processing date; exact full-row duplicates removed',
-            'Sales': 'Sales 120/180 input files carry descriptive history. Current RAW updates SRate and updates SPer only when supplied on exact Serial No + Sale Date overlaps; new transactions append. Blank Lab/Flo become NON.',
+            'Sales': "Sales 120/180 previous files carry descriptive history before the boundary date. When current RAW contains the previous file's latest Sale Date, that whole date is replaced from RAW and later RAW dates append; otherwise only rows newer than the latest previous timestamp append. Blank Lab/Flo become NON.",
             'Stock': 'RAW Stock only; no previous Stock file required; canonical output headers are built into the processor; formula-backed Expected is materialized as a numeric value from the source cache (with a GRap/GPer fallback); exact full-row duplicates are removed',
             'Duplicate Cleaning': 'Only fully identical output rows are removed after merge/window processing. Similar or repeated activity with any differing field is retained.',
-            'Derived Fields': 'Sales Carat_Grp/Amt and Stock Carat_Grp/Tag are computed in Python and written as values; blank Lab/Flo become NON; downstream logic does not depend on Excel cached formulas.',
+            'Derived Fields': 'Sales Carat_Grp/Amt and Stock Carat_Grp/Tag are computed in Python and written as values; blank Lab/Flo become NON (including blank Stock Lab -> NON); downstream logic does not depend on Excel cached formulas.',
         },
         'summary': audit['summary'], 'issue_counts': dict(Counter(x['Severity'] for x in audit['issues'])),
         'all_datasets_ok': all(ok_flags), 'audit_file': audit_path.name
