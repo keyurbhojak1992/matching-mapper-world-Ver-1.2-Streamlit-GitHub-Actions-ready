@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import io
 import re
 import zipfile
@@ -154,13 +155,26 @@ def _current_pricing_datetime() -> datetime:
     return datetime.now(ZoneInfo("Asia/Kolkata")).replace(tzinfo=None, microsecond=0)
 
 
+_BID_SUMMARY_COLUMNS = {
+    "Bid", "Bid no", "Serial No", "Shape", "Carat", "Color", "Clarity", "Fluo", "Lab"
+}
+
+
 def _read_bid_summary(payload: bytes) -> pd.DataFrame:
+    """Read only the columns used by the Last-BID profile builder.
+
+    Bid Summary can contain many extra pricing/action columns. Loading those columns
+    into pandas used a large amount of memory on Streamlit Cloud even though this
+    workspace never reads them. The callable usecols keeps the selected-row logic
+    identical while materially reducing peak memory.
+    """
+    kwargs = {"usecols": lambda column: str(column).strip() in _BID_SUMMARY_COLUMNS}
     try:
-        return pd.read_excel(io.BytesIO(payload), sheet_name="Sheet1")
+        return pd.read_excel(io.BytesIO(payload), sheet_name="Sheet1", **kwargs)
     except ValueError:
         # Some exported workbooks use a different worksheet name. Keep the file
         # usable by falling back to the first sheet while leaving other logic unchanged.
-        return pd.read_excel(io.BytesIO(payload), sheet_name=0)
+        return pd.read_excel(io.BytesIO(payload), sheet_name=0, **kwargs)
 
 
 def build_confirm_last_n_bid_from_summary(
@@ -173,7 +187,14 @@ def build_confirm_last_n_bid_from_summary(
         raise ValueError("Last N bids must be at least 1.")
 
     print("[1/4] Reading Bid Summary")
-    dataframe = _clean_object_columns(_read_bid_summary(bid_summary_bytes))
+    # First load only the columns this feature uses. Clean text only after reducing
+    # the workbook to the latest N bids so the same output is produced with much
+    # lower temporary memory usage.
+    dataframe = _read_bid_summary(bid_summary_bytes)
+    dataframe.columns = [
+        re.sub(r"\s+", " ", str(column).replace("\u00a0", " ")).strip()
+        for column in dataframe.columns
+    ]
     required = ["Bid", "Serial No", "Shape", "Carat", "Color", "Clarity", "Fluo", "Lab"]
     missing = [column for column in required if column not in dataframe.columns]
     if missing:
@@ -197,6 +218,7 @@ def build_confirm_last_n_bid_from_summary(
     selected = dataframe[dataframe["_BID_NO_NUM"].isin(selected_numbers)].copy()
     selected.drop(columns=["_BID_NO_NUM"], inplace=True)
     selected.reset_index(drop=True, inplace=True)
+    selected = _clean_object_columns(selected)
 
     run_dt = (run_datetime or _current_pricing_datetime()).replace(microsecond=0)
     output = pd.DataFrame(index=selected.index)
@@ -380,6 +402,7 @@ def prepare_pricing_profile(
     *,
     last_n_bids: int = DEFAULT_LAST_N_BIDS,
     run_datetime: datetime | None = None,
+    include_master_bytes: bool = True,
 ) -> tuple[bytes, bytes, dict[str, object]]:
     confirm, summary = build_confirm_last_n_bid_from_summary(
         bid_summary_bytes,
@@ -388,7 +411,9 @@ def prepare_pricing_profile(
     )
     master = build_master_db_from_confirm(confirm)
     profile = build_party_profile_temp(master)
-    return _to_parquet_bytes(master), _to_parquet_bytes(profile), summary
+    profile_bytes = _to_parquet_bytes(profile)
+    master_bytes = _to_parquet_bytes(master) if include_master_bytes else b""
+    return master_bytes, profile_bytes, summary
 
 
 def _repository_bid_summary_bytes() -> bytes:
@@ -492,12 +517,30 @@ def run_pricing_last5_bid_suggested(
             bid_payload,
             last_n_bids=int(last_n_bids),
             run_datetime=run_dt,
+            include_master_bytes=False,
         )
         print("[4/4] Running existing Suggested Stock engine")
 
+    # The Last-BID profile created above belongs to the synthetic Pricing salesperson.
+    # Without this scope guard, the preserved engine also processes every salesperson
+    # from PARTY_PROFILE_PERM, turning this pricing job into a full Suggested Stock run
+    # and causing long runtimes / high memory usage. Keep the matching engine itself
+    # untouched and limit only this new workspace to the profile it just created.
     runtime = dict(PRICING_LAST5_DEFAULTS)
     if runtime_overrides:
         runtime.update(runtime_overrides)
+
+    runtime["TEST_MODE"] = True
+    runtime["TEST_SALESPEOPLE"] = [FIXED_SALE_PERSON]
+    runtime["TEST_MODE_PARTY"] = True
+    runtime["TEST_PARTIES"] = [FIXED_SOLD_PARTY]
+    summary["processing_scope"] = f"{FIXED_SALE_PERSON} / {FIXED_SOLD_PARTY}"
+
+    # Release the original Bid Summary payload before the Excel-heavy preserved
+    # engine starts. This matters on memory-constrained Streamlit workers.
+    bid_payload = None
+    _master_bytes = None
+    gc.collect()
 
     # Output-mode controls are managed here so the preserved matching engine stays untouched.
     runtime["GENERATE_INDIVIDUAL_REPORTS"] = True

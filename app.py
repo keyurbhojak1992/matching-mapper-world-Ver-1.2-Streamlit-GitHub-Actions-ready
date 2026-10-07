@@ -1047,7 +1047,7 @@ def pricing_last5_bid_page() -> None:
             {"Input": "No-need rules", "Behavior": "Uploaded override" if no_need else ("Saved default" if _repository_default_exists("no_need") else "Skipped")},
             {"Input": "Sales history", "Behavior": f"{len(sales_history or [])} uploaded" if sales_history else "Skipped"},
         ]
-        st.dataframe(source_rows, hide_index=True, use_container_width=True)
+        st.dataframe(source_rows, hide_index=True, width="stretch")
         st.caption(
             "PARTY_PROFILE_TEMP is not uploaded in this workspace. It is rebuilt automatically from the latest Bid Summary selection on every run."
         )
@@ -1165,34 +1165,15 @@ def pricing_last5_bid_page() -> None:
             }[value],
         )
 
-        st.markdown("#### Salesperson / party scope")
-        requested_salespeople = ["Mr. Vivek Chalodiya", "Mr. Hrithik Hundia", "Ms. Sonali Sonavane"]
-        salesperson_options = unique_clean(default_salespeople() + requested_salespeople)
-        runtime["TEST_MODE"] = st.toggle(
-            "Enable salesperson selection",
-            value=bool(PRICING_LAST5_DEFAULTS["TEST_MODE"]),
-            key="pricing_last5_test_mode",
-        )
-        runtime["TEST_SALESPEOPLE"] = st.multiselect(
-            "Salespeople",
-            options=salesperson_options,
-            default=requested_salespeople,
-            disabled=not runtime["TEST_MODE"],
-            key="pricing_last5_salespeople",
-        )
-
-        runtime["TEST_MODE_PARTY"] = st.toggle(
-            "Enable party selection",
-            value=bool(PRICING_LAST5_DEFAULTS["TEST_MODE_PARTY"]),
-            key="pricing_last5_party_mode",
-        )
-        party_options = unique_clean(default_parties() + ["SHWET GEMS LTD"])
-        runtime["TEST_PARTIES"] = st.multiselect(
-            "Parties",
-            options=party_options,
-            default=["SHWET GEMS LTD"],
-            disabled=not runtime["TEST_MODE_PARTY"],
-            key="pricing_last5_parties",
+        st.markdown("#### Processing scope")
+        runtime["TEST_MODE"] = True
+        runtime["TEST_SALESPEOPLE"] = ["Pricing"]
+        runtime["TEST_MODE_PARTY"] = True
+        runtime["TEST_PARTIES"] = ["Pricing"]
+        st.info(
+            "This Last-BID workspace is intentionally limited to the generated Pricing profile. "
+            "The permanent profile may still be used as an input, but regular salespeople are not "
+            "processed here. Use Suggested Stock Mapper for the full salesperson run."
         )
 
         st.markdown("#### Match-status output filtering")
@@ -1225,10 +1206,6 @@ def pricing_last5_bid_page() -> None:
         missing.append("Stock Actual workbook")
     if bid_summary is None and not _repository_default_exists("bid_summary"):
         missing.append("Bid Summary upload or data/Bid_Summary.xlsx")
-    if runtime["TEST_MODE"] and not runtime["TEST_SALESPEOPLE"]:
-        missing.append("one or more selected salespeople")
-    if runtime["TEST_MODE_PARTY"] and not runtime["TEST_PARTIES"]:
-        missing.append("one or more selected parties")
     if runtime["MATCH_STATUS_FILTER_MODE"] != "NONE" and not runtime["MATCH_STATUS_ALLOWED_TYPES"]:
         missing.append("one or more allowed match statuses")
     if runtime["MATCH_STATUS_FILTER_MODE"] == "SPECIFIC" and runtime["MATCH_STATUS_SPECIFIC_PARTIES"] == ["NONE"]:
@@ -1241,7 +1218,7 @@ def pricing_last5_bid_page() -> None:
     if st.button(
         "Generate Last-BID suggested output",
         type="primary",
-        use_container_width=True,
+        width="stretch",
         disabled=bool(missing),
         key="run_pricing_last5_bid",
     ):
@@ -1283,7 +1260,7 @@ def pricing_last5_bid_page() -> None:
             st.dataframe(
                 [{"Bid": item.get("bid"), "Rows": item.get("rows")} for item in bid_rows],
                 hide_index=True,
-                use_container_width=True,
+                width="stretch",
             )
         with st.expander("Processing print sequence", expanded=True):
             st.code(result.get("logs", ""), language="text")
