@@ -1,0 +1,43 @@
+PRICING LAST 5 BID - ADD-ON ONLY
+================================
+
+This ZIP is intentionally NOT a replacement for your existing application.
+It contains only the new Pricing Last 5 BID logic plus a small integration patch.
+
+FILES THAT ARE ADDED (no overwrite):
+  adapters/pricing_last5_bid_adapter.py
+  data/Bid_Summary.xlsx
+  tests/test_pricing_last5_bid.py
+
+EXISTING FILES THAT NEED SMALL MERGE EDITS:
+  app.py
+  adapters/common.py
+  data/DEFAULT_FILES.md
+
+Recommended install from the root folder of your existing app:
+
+1) Extract this ZIP into the root of your existing app.
+   The adapters/, data/, and tests/ files above are new files only.
+
+2) Apply the integration edits:
+     git apply pricing_last5_integration.patch
+
+3) Run your app normally.
+
+The new workspace will appear as:
+  Pricing Last 5 BID Suggested
+
+Default Bid source:
+  data/Bid_Summary.xlsx
+
+On each run the workspace re-reads Bid_Summary.xlsx, finds the latest numeric N bids
+(default 5), displays/prints the selected Bid numbers, rebuilds the temporary pricing
+profile, and calls the existing Suggested Stock logic.
+
+IMPORTANT:
+- This add-on does not replace your full existing project.
+- Existing workspaces are kept.
+- If you have independently edited app.py/adapters/common.py after the supplied version,
+  `git apply` may report a conflict. In that case review pricing_last5_integration.patch
+  and merge only those Pricing Last 5 BID sections manually.
+- tests/test_pricing_last5_bid.py is optional at runtime; it is included only for validation.
