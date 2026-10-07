@@ -1,0 +1,34 @@
+PRICING LAST 5 BID - SIDEBAR INTEGRATION FIX
+
+Your current app already contains:
+- adapters/pricing_last5_bid_adapter.py
+- data/Bid_Summary.xlsx
+- tests/test_pricing_last5_bid.py
+- pricing_last5_integration.patch
+
+The missing step was applying the integration patch.
+
+From the project root run:
+
+    git apply --check pricing_last5_integration.patch
+    git apply pricing_last5_integration.patch
+
+Then commit and push:
+
+    git add app.py adapters/common.py data/DEFAULT_FILES.md
+    git commit -m "Enable Pricing Last 5 BID Suggested workspace"
+    git push
+
+The patch changes ONLY:
+- app.py
+- adapters/common.py
+- data/DEFAULT_FILES.md
+
+It does not replace the other workspaces or processors.
+
+After Streamlit redeploys, the sidebar will show:
+    Pricing Last 5 BID Suggested
+
+Validation performed on the uploaded app version:
+- Python compile: PASS
+- tests/test_pricing_last5_bid.py + tests/test_ui.py: 12 passed
