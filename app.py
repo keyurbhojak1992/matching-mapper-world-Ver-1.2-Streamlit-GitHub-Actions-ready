@@ -21,6 +21,12 @@ from adapters.common import repository_data_path
 from adapters.dealmaker_adapter import bundled_dealmaker_control_bytes, run_dealmaker
 from adapters.filter_demand_adapter import run_filter_demand
 from adapters.layout_stock_matcher_adapter import run_layout_stock_matcher
+from adapters.pricing_last5_bid_adapter import (
+    DEFAULT_LAST_N_BIDS,
+    DEFAULT_OUTPUT_MODE,
+    PRICING_LAST5_DEFAULTS,
+    run_pricing_last5_bid_suggested,
+)
 from adapters.separate_adapter import run_separate_excel_files
 from adapters.sort_adapter import run_sorting_process
 from adapters.suggested_list_splitter_adapter import run_suggested_list_splitter
@@ -71,6 +77,7 @@ sidebar_brand()
 PAGES = [
     "Overview",
     "Suggested Stock Mapper",
+    "Pricing Last 5 BID Suggested",
     "USA Suggested Stock Mapper",
     "Auto Pricing",
     "Dealmaker",
@@ -393,14 +400,15 @@ def _show_github_recovery_panel(settings: GitHubCloudConfig | None) -> None:
 def overview_page() -> None:
     hero()
     metrics = st.columns(4)
-    metrics[0].metric("Available services", "10")
-    metrics[1].metric("Core operations", "10")
+    metrics[0].metric("Available services", "11")
+    metrics[1].metric("Core operations", "11")
     metrics[2].metric("Processing", "Secure full processing")
     metrics[3].metric("Primary outputs", "XLSX / ZIP")
 
     st.markdown("### Choose a service")
     cards = [
         ("PROFILE MATCHING", "Suggested Stock Mapper", "Output: Suggested report ZIP"),
+        ("PRICING BID HISTORY", "Pricing Last 5 BID Suggested", "Output: Latest-BID party suggested ZIP"),
         ("USA SALES HISTORY", "USA Suggested Stock Mapper", "Output: Salesperson / party suggested ZIP"),
         ("PRICING INTELLIGENCE", "Auto Pricing", "Output: Pricing revision + cross-verification ZIP"),
         ("DEAL ALLOCATION", "Dealmaker", "Output: Production review ZIP"),
@@ -965,6 +973,322 @@ def suggested_page() -> None:
             )
         _show_result("suggested_result", "Download suggested reports ZIP")
 
+
+
+def pricing_last5_bid_page() -> None:
+    section_header(
+        "Pricing bid-history intelligence",
+        "Pricing Last 5 BID Suggested",
+        "Build the latest-BID pricing profile automatically from the saved Bid Summary, then run the existing Suggested Stock matching engine without manually preparing Confirm Stone, MASTER_DB, or PARTY_PROFILE_TEMP files.",
+        ["Load Bid Summary", "Choose latest bids", "Configure matching", "Generate party output"],
+    )
+
+    tab_files, tab_matching, tab_scope = st.tabs([
+        "Input files",
+        "Matching configuration",
+        "Scope & output",
+    ])
+
+    with tab_files:
+        st.markdown("#### Required stock input")
+        stock = st.file_uploader(
+            "Stock Actual workbook *",
+            type=["xlsx"],
+            key="pricing_last5_stock",
+        )
+
+        st.markdown("#### Bid history")
+        bid_summary = st.file_uploader(
+            "Bid Summary (optional override)",
+            type=["xlsx"],
+            key="pricing_last5_bid_summary",
+            help="Leave blank to use data/Bid_Summary.xlsx saved with the app.",
+        )
+        default_bid_ready = _repository_default_exists("bid_summary")
+        if bid_summary is not None:
+            st.success(f"Bid source for this run: uploaded {bid_summary.name}")
+        elif default_bid_ready:
+            st.success("Bid source for this run: saved data/Bid_Summary.xlsx")
+        else:
+            st.warning("Saved data/Bid_Summary.xlsx is missing. Upload a Bid Summary to continue.")
+
+        st.markdown("#### Existing Suggested Stock inputs")
+        left, right = st.columns(2)
+        with left:
+            profile_perm = st.file_uploader(
+                "Permanent party profile (optional override)",
+                type=["parquet"],
+                key="pricing_last5_perm",
+                help="Leave blank to use the existing saved permanent profile when available.",
+            )
+            filters = st.file_uploader(
+                "Filters workbook (optional override)",
+                type=["xlsx"],
+                key="pricing_last5_filters",
+            )
+        with right:
+            no_need = st.file_uploader(
+                "No-need / exclusion workbook (optional override)",
+                type=["xlsx"],
+                key="pricing_last5_noneed",
+            )
+            sales_history = st.file_uploader(
+                "Sales history workbook(s) (optional)",
+                type=["xlsx"],
+                accept_multiple_files=True,
+                key="pricing_last5_sales_history",
+                help="Used only by the existing advanced sorting logic if that logic is enabled in the preserved engine.",
+            )
+
+        source_rows = [
+            {"Input": "Bid Summary", "Behavior": "Uploaded override" if bid_summary else ("Saved default" if default_bid_ready else "Missing")},
+            {"Input": "Permanent profile", "Behavior": "Uploaded override" if profile_perm else ("Saved default" if _repository_default_exists("profile_perm") else "Skipped")},
+            {"Input": "Filters", "Behavior": "Uploaded override" if filters else ("Saved default" if _repository_default_exists("filters") else "Skipped")},
+            {"Input": "No-need rules", "Behavior": "Uploaded override" if no_need else ("Saved default" if _repository_default_exists("no_need") else "Skipped")},
+            {"Input": "Sales history", "Behavior": f"{len(sales_history or [])} uploaded" if sales_history else "Skipped"},
+        ]
+        st.dataframe(source_rows, hide_index=True, use_container_width=True)
+        st.caption(
+            "PARTY_PROFILE_TEMP is not uploaded in this workspace. It is rebuilt automatically from the latest Bid Summary selection on every run."
+        )
+
+    include_defaults = {
+        "COLOR": True,
+        "CLARITY": True,
+        "FLORO": True,
+        "CUT": False,
+        "POLISH": False,
+        "SYMMETRY": False,
+        "SHADE": False,
+        "MILKY": False,
+        "TABLE_BLACK": False,
+        "SIDE_BLACK": False,
+        "TABLE_OPEN": False,
+        "SIDE_OPEN": False,
+        "GIRDLE_OPEN": False,
+        "PAVILION_OPEN": False,
+    }
+    tolerance_defaults = {
+        "COLOR": True,
+        "CLARITY": True,
+        "FLORO": True,
+        "CUT": False,
+        "POLISH": False,
+        "SYMMETRY": False,
+        "SHADE": True,
+        "MILKY": True,
+        "TABLE_BLACK": True,
+        "SIDE_BLACK": True,
+        "TABLE_OPEN": True,
+        "SIDE_OPEN": True,
+        "GIRDLE_OPEN": True,
+        "PAVILION_OPEN": True,
+    }
+    runtime: dict[str, object] = {}
+
+    with tab_matching:
+        c1, c2 = st.columns(2)
+        runtime["TOLERANCE_LEVEL"] = int(
+            c1.number_input(
+                "Tolerance level",
+                min_value=0,
+                max_value=3,
+                value=int(PRICING_LAST5_DEFAULTS["TOLERANCE_LEVEL"]),
+                step=1,
+                key="pricing_last5_tolerance_level",
+            )
+        )
+        runtime["ENABLE_FLO_MAPPING"] = c2.toggle(
+            "Group VSL / SL with FNT",
+            value=bool(PRICING_LAST5_DEFAULTS["ENABLE_FLO_MAPPING"]),
+            key="pricing_last5_flo_mapping",
+        )
+
+        st.markdown("#### Matching dimensions and tolerance switches")
+        h1, h2, h3 = st.columns([1.5, 1, 1])
+        h1.markdown("**Dimension**")
+        h2.markdown("**Include in matching**")
+        h3.markdown("**Allow tolerance**")
+        for label, default in include_defaults.items():
+            display_name = label.replace("_", " ").title()
+            a, b, c = st.columns([1.5, 1, 1])
+            a.write(display_name)
+            runtime[f"INCLUDE_{label}"] = b.checkbox(
+                "Include",
+                value=default,
+                key=f"pricing_last5_inc_{label}",
+                label_visibility="collapsed",
+            )
+            runtime[f"ENABLE_{label}_TOLERANCE"] = c.checkbox(
+                "Tolerance",
+                value=tolerance_defaults[label],
+                key=f"pricing_last5_tol_{label}",
+                label_visibility="collapsed",
+                disabled=not runtime[f"INCLUDE_{label}"],
+            )
+
+        d1, d2 = st.columns(2)
+        runtime["SHOW_REF_STONE_ID"] = d1.toggle(
+            "Show reference Stone ID",
+            value=bool(PRICING_LAST5_DEFAULTS["SHOW_REF_STONE_ID"]),
+            key="pricing_last5_ref_stone",
+        )
+        runtime["SHOW_BASIC_SUPERTAG"] = d2.toggle(
+            "Show basic supertag",
+            value=bool(PRICING_LAST5_DEFAULTS["SHOW_BASIC_SUPERTAG"]),
+            key="pricing_last5_basic_supertag",
+        )
+
+    with tab_scope:
+        st.markdown("#### Last-BID selection and output")
+        o1, o2 = st.columns(2)
+        last_n_bids = int(
+            o1.number_input(
+                "Latest Bid count",
+                min_value=1,
+                max_value=50,
+                value=DEFAULT_LAST_N_BIDS,
+                step=1,
+                key="pricing_last5_count",
+                help="The app extracts numeric Bid numbers, sorts them, and uses the highest N distinct Bid numbers.",
+            )
+        )
+        output_mode = o2.selectbox(
+            "Output mode",
+            ["DIRECT_PARTY_ZIP", "REGULAR_NAV_ZIP", "BOTH"],
+            index=["DIRECT_PARTY_ZIP", "REGULAR_NAV_ZIP", "BOTH"].index(DEFAULT_OUTPUT_MODE),
+            key="pricing_last5_output_mode",
+            format_func=lambda value: {
+                "DIRECT_PARTY_ZIP": "Direct party ZIP (default, no Navigation)",
+                "REGULAR_NAV_ZIP": "Regular salesperson workbooks + Navigation",
+                "BOTH": "Both direct party files and regular Navigation workbooks",
+            }[value],
+        )
+
+        st.markdown("#### Salesperson / party scope")
+        requested_salespeople = ["Mr. Vivek Chalodiya", "Mr. Hrithik Hundia", "Ms. Sonali Sonavane"]
+        salesperson_options = unique_clean(default_salespeople() + requested_salespeople)
+        runtime["TEST_MODE"] = st.toggle(
+            "Enable salesperson selection",
+            value=bool(PRICING_LAST5_DEFAULTS["TEST_MODE"]),
+            key="pricing_last5_test_mode",
+        )
+        runtime["TEST_SALESPEOPLE"] = st.multiselect(
+            "Salespeople",
+            options=salesperson_options,
+            default=requested_salespeople,
+            disabled=not runtime["TEST_MODE"],
+            key="pricing_last5_salespeople",
+        )
+
+        runtime["TEST_MODE_PARTY"] = st.toggle(
+            "Enable party selection",
+            value=bool(PRICING_LAST5_DEFAULTS["TEST_MODE_PARTY"]),
+            key="pricing_last5_party_mode",
+        )
+        party_options = unique_clean(default_parties() + ["SHWET GEMS LTD"])
+        runtime["TEST_PARTIES"] = st.multiselect(
+            "Parties",
+            options=party_options,
+            default=["SHWET GEMS LTD"],
+            disabled=not runtime["TEST_MODE_PARTY"],
+            key="pricing_last5_parties",
+        )
+
+        st.markdown("#### Match-status output filtering")
+        f1, f2 = st.columns([1, 2])
+        status_modes = ["NONE", "ALL", "SPECIFIC"]
+        runtime["MATCH_STATUS_FILTER_MODE"] = f1.selectbox(
+            "Filter mode",
+            status_modes,
+            index=status_modes.index(str(PRICING_LAST5_DEFAULTS["MATCH_STATUS_FILTER_MODE"])),
+            key="pricing_last5_status_mode",
+        )
+        runtime["MATCH_STATUS_ALLOWED_TYPES"] = f2.multiselect(
+            "Allowed match statuses",
+            ["Exact", "Near by", "May be", "Filter"],
+            default=list(PRICING_LAST5_DEFAULTS["MATCH_STATUS_ALLOWED_TYPES"]),
+            disabled=runtime["MATCH_STATUS_FILTER_MODE"] == "NONE",
+            key="pricing_last5_allowed_statuses",
+        )
+        specific_text = st.text_input(
+            "Specific status-filter parties",
+            value="NONE",
+            disabled=runtime["MATCH_STATUS_FILTER_MODE"] != "SPECIFIC",
+            key="pricing_last5_specific_status_parties",
+            help="Comma-separated party names. Default is NONE.",
+        )
+        runtime["MATCH_STATUS_SPECIFIC_PARTIES"] = parse_delimited_values(specific_text) or ["NONE"]
+
+    missing: list[str] = []
+    if stock is None:
+        missing.append("Stock Actual workbook")
+    if bid_summary is None and not _repository_default_exists("bid_summary"):
+        missing.append("Bid Summary upload or data/Bid_Summary.xlsx")
+    if runtime["TEST_MODE"] and not runtime["TEST_SALESPEOPLE"]:
+        missing.append("one or more selected salespeople")
+    if runtime["TEST_MODE_PARTY"] and not runtime["TEST_PARTIES"]:
+        missing.append("one or more selected parties")
+    if runtime["MATCH_STATUS_FILTER_MODE"] != "NONE" and not runtime["MATCH_STATUS_ALLOWED_TYPES"]:
+        missing.append("one or more allowed match statuses")
+    if runtime["MATCH_STATUS_FILTER_MODE"] == "SPECIFIC" and runtime["MATCH_STATUS_SPECIFIC_PARTIES"] == ["NONE"]:
+        missing.append("one or more status-filter parties")
+
+    st.markdown("#### Run pricing suggested process")
+    st.caption(
+        "Every run re-reads Bid Summary, prints the selected latest Bid numbers, rebuilds the temporary pricing profile, and then runs the existing Suggested Stock logic."
+    )
+    if st.button(
+        "Generate Last-BID suggested output",
+        type="primary",
+        use_container_width=True,
+        disabled=bool(missing),
+        key="run_pricing_last5_bid",
+    ):
+        try:
+            with st.spinner("Selecting the latest bids, rebuilding the pricing profile, and generating Suggested Stock output..."):
+                data, filename, logs, summary = run_pricing_last5_bid_suggested(
+                    stock_bytes=stock.getvalue(),
+                    bid_summary_bytes=bid_summary.getvalue() if bid_summary else None,
+                    profile_perm_bytes=profile_perm.getvalue() if profile_perm else None,
+                    filter_bytes=filters.getvalue() if filters else None,
+                    clean_bytes=no_need.getvalue() if no_need else None,
+                    sales_history_files=[(item.name, item.getvalue()) for item in (sales_history or [])],
+                    runtime_overrides=runtime,
+                    last_n_bids=last_n_bids,
+                    output_mode=output_mode,
+                )
+                _save_result("pricing_last5_result", data, filename, logs)
+                st.session_state["pricing_last5_summary"] = summary
+            st.rerun()
+        except Exception as exc:
+            _show_user_error("Unable to complete the Last-BID pricing process", exc)
+
+    if missing:
+        st.info("Complete the following before processing: " + "; ".join(dict.fromkeys(missing)))
+
+    result = st.session_state.get("pricing_last5_result")
+    summary = st.session_state.get("pricing_last5_summary") or {}
+    if result and summary:
+        selected_bids = list(summary.get("selected_bids") or [])
+        st.success(
+            "Latest bids selected for this run: " + (", ".join(selected_bids) if selected_bids else "—")
+        )
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Bid groups used", str(len(selected_bids)))
+        m2.metric("Bid rows used", f"{int(summary.get('total_rows', 0)):,}")
+        m3.metric("Output mode", str(summary.get("output_mode", output_mode)).replace("_", " "))
+        bid_rows = summary.get("bid_rows") or []
+        if bid_rows:
+            st.dataframe(
+                [{"Bid": item.get("bid"), "Rows": item.get("rows")} for item in bid_rows],
+                hide_index=True,
+                use_container_width=True,
+            )
+        with st.expander("Processing print sequence", expanded=True):
+            st.code(result.get("logs", ""), language="text")
+
+    _show_result("pricing_last5_result", "Download Last-BID suggested ZIP")
 
 def auto_pricing_page() -> None:
     section_header(
@@ -1930,6 +2254,8 @@ if page == "Overview":
     overview_page()
 elif page == "Suggested Stock Mapper":
     suggested_page()
+elif page == "Pricing Last 5 BID Suggested":
+    pricing_last5_bid_page()
 elif page == "USA Suggested Stock Mapper":
     usa_suggested_stock_mapper_page()
 elif page == "Auto Pricing":
