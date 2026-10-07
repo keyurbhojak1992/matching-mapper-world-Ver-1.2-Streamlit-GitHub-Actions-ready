@@ -91,8 +91,7 @@ The Suggested Stock Mapper and BID Drop Checking Process use repository defaults
 ```text
 data/PARTY_PROFILE_PERM.parquet
 data/PARTY_PROFILE_TEMP.parquet
-data/filters - EBID.xlsx
-data/no_need.xlsx
+defaults/suggested_rules.py  # built-in Filters + No-need rule dictionaries
 ```
 
 Uploaded files always override the repository copy. The four business-data files must be committed to the private repository; the app does not generate them.

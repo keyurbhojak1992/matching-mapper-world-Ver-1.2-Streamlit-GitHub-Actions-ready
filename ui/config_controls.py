@@ -257,6 +257,22 @@ def discover_suggested_names_from_streams(
         parties.extend(
             _excel_values_stream(filter_file, {"SOLD PARTY", "Sold Party", "Party Name"})
         )
+    else:
+        from defaults.suggested_rules import DEFAULT_FILTER_RULES
+
+        for sheet_name in ("Change Format", "Tolerance"):
+            payload = DEFAULT_FILTER_RULES.get(sheet_name, {})
+            columns = [str(value) for value in payload.get("columns", [])]
+            normalized = [_normalized_column(value) for value in columns]
+            sales_indexes = [i for i, value in enumerate(normalized) if value == "salesperson"]
+            party_indexes = [i for i, value in enumerate(normalized) if value in {"soldparty", "partyname"}]
+            for row in payload.get("rows", []):
+                for index in sales_indexes:
+                    if index < len(row) and row[index] not in (None, ""):
+                        salespeople.append(str(row[index]).strip().title())
+                for index in party_indexes:
+                    if index < len(row) and row[index] not in (None, ""):
+                        parties.append(str(row[index]).strip())
 
     return unique_clean(salespeople), unique_clean(parties)
 

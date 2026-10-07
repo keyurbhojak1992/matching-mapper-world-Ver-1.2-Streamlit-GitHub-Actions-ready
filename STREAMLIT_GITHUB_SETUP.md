@@ -4,7 +4,7 @@
 
 The Streamlit app remains the private upload/configuration interface. The heavy Suggested Stock Mapper run is moved to a standard private-repository GitHub Actions Linux runner.
 
-The app stores four administrator-managed default inputs in the private repository under `data/`: the permanent and temporary Parquet profiles, `filters - EBID.xlsx`, and `no_need.xlsx`. User-uploaded Stock Actual, overrides, and job-specific files are not committed; each submitted job uses a temporary **private draft release**, uploads `input_bundle.zip`, and dispatches `.github/workflows/process-suggested-cloud.yml`.
+The app stores the permanent and temporary Parquet profiles under `data/`. Suggested/BID filter and no-need defaults are embedded as Python dictionaries in `defaults/suggested_rules.py`; uploaded Excel rule files are optional overrides. User-uploaded Stock Actual, overrides, and job-specific files are not committed; each submitted job uses a temporary **private draft release**, uploads `input_bundle.zip`, and dispatches `.github/workflows/process-suggested-cloud.yml`.
 
 The worker:
 

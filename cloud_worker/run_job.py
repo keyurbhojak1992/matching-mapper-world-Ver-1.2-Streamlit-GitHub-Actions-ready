@@ -195,7 +195,6 @@ def run_job(arguments: argparse.Namespace) -> int:
             _atomic_json(status_path, payload)
 
         assert stock_path is not None
-        assert filter_path is not None
         manifest = run_suggested_batched_from_paths(
             stock_path=stock_path,
             profile_perm_path=profile_perm_path,

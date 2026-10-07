@@ -39,6 +39,7 @@ from .suggested_result_assembler import (
 )
 
 MASTER_PATH = MASTER_CODE_DIR / "Suggested_Process.py"
+PRICING_MASTER_PATH = MASTER_CODE_DIR / "Pricing_Suggested_Process.py"
 StatusCallback = Callable[[dict[str, object]], None]
 
 
@@ -148,6 +149,7 @@ def _execute_master_in_workspace(
     clean_path: Path,
     sales_dir: Path,
     runtime_overrides: dict[str, object] | None,
+    master_path: Path = MASTER_PATH,
 ) -> tuple[Path, str]:
     normalized_stock_path, original_stock_sheet = _prepare_stock_workbook(
         stock_path,
@@ -159,7 +161,7 @@ def _execute_master_in_workspace(
     module = None
     logs_text = ""
     try:
-        module = load_fresh_module(MASTER_PATH, "suggested_master")
+        module = load_fresh_module(master_path, "suggested_master")
         apply_runtime_overrides(module, runtime_overrides)
 
         # Rebuild constants that the untouched source computes at import time.
@@ -222,6 +224,10 @@ def _materialize_suggested_input(
     destination = work / destination_name
     if uploaded_bytes is not None:
         return write_bytes(destination, uploaded_bytes)
+    if default_key in {"filters", "no_need"}:
+        # Suggested rules are built into Python. An uploaded workbook is the only
+        # reason to materialize these legacy Excel paths.
+        return destination
     source = resolve_repository_input(None, default_key, required=required)
     if source is not None:
         shutil.copy2(source, destination)
@@ -237,13 +243,14 @@ def run_suggested_process(
     clean_bytes: bytes | None,
     sales_history_files: Iterable[tuple[str, bytes]] = (),
     runtime_overrides: dict[str, object] | None = None,
+    master_path: Path = MASTER_PATH,
 ) -> tuple[bytes, str, str]:
     """Execute Suggested Process, using repository defaults for omitted files."""
     with temp_workspace("matching_mapper_suggested_") as work:
         stock_path = write_bytes(work / "stock_uploaded.xlsx", stock_bytes)
         filter_path = _materialize_suggested_input(
             work=work, uploaded_bytes=filter_bytes, default_key="filters",
-            destination_name="filters.xlsx", required=True,
+            destination_name="filters.xlsx", required=False,
         )
         perm_path = _materialize_suggested_input(
             work=work, uploaded_bytes=profile_perm_bytes, default_key="profile_perm",
@@ -273,6 +280,7 @@ def run_suggested_process(
             clean_path=clean_path,
             sales_dir=sales_dir,
             runtime_overrides=runtime_overrides,
+            master_path=master_path,
         )
         return output_path.read_bytes(), output_path.name, logs
 
@@ -293,17 +301,16 @@ def run_suggested_process_from_paths(
     if not stock_path.is_file():
         raise FileNotFoundError(f"Stock workbook not found: {stock_path}")
 
-    resolved_filter = resolve_repository_input(filter_path, "filters", required=True)
+    resolved_filter = Path(filter_path) if filter_path is not None and Path(filter_path).is_file() else None
     resolved_perm = resolve_repository_input(profile_perm_path, "profile_perm")
     resolved_temp = resolve_repository_input(profile_temp_path, "profile_temp")
-    resolved_clean = resolve_repository_input(clean_path, "no_need")
-    assert resolved_filter is not None
+    resolved_clean = Path(clean_path) if clean_path is not None and Path(clean_path).is_file() else None
 
     with temp_workspace("matching_mapper_suggested_batch_") as work:
         local_stock = work / "stock_uploaded.xlsx"
         local_filter = work / "filters.xlsx"
         shutil.copy2(stock_path, local_stock)
-        shutil.copy2(resolved_filter, local_filter)
+        _copy_optional(resolved_filter, local_filter)
 
         local_perm = _copy_optional(resolved_perm, work / "PARTY_PROFILE_PERM.parquet")
         local_temp = _copy_optional(resolved_temp, work / "PARTY_PROFILE_TEMP.parquet")
@@ -372,7 +379,22 @@ def _parquet_salespeople(path: Path | None) -> list[str]:
 
 def _filter_salespeople(path: Path | None) -> list[str]:
     if path is None or not Path(path).is_file():
-        return []
+        from defaults.suggested_rules import DEFAULT_FILTER_RULES
+
+        values: list[str] = []
+        for sheet_name in ("Change Format", "Tolerance"):
+            payload = DEFAULT_FILTER_RULES.get(sheet_name, {})
+            columns = [str(value) for value in payload.get("columns", [])]
+            normalized = [_normalized_column(value) for value in columns]
+            try:
+                index = normalized.index("salesperson")
+            except ValueError:
+                continue
+            for row in payload.get("rows", []):
+                if index < len(row) and row[index] not in (None, ""):
+                    values.append(str(row[index]).strip().title())
+        return _clean_values(values)
+
     workbook = load_workbook(path, read_only=True, data_only=True)
     try:
         preferred = [
@@ -394,7 +416,6 @@ def _filter_salespeople(path: Path | None) -> list[str]:
             for row in worksheet.iter_rows(min_row=2, values_only=True):
                 for index in indexes:
                     if index < len(row) and row[index] not in (None, ""):
-                        # The preserved filter loader normalizes this column with pandas .str.title().
                         values.append(str(row[index]).strip().title())
         return _clean_values(values)
     finally:
@@ -498,9 +519,8 @@ def run_suggested_batched_from_paths(
 
     profile_perm_path = resolve_repository_input(profile_perm_path, "profile_perm")
     profile_temp_path = resolve_repository_input(profile_temp_path, "profile_temp")
-    filter_path = resolve_repository_input(filter_path, "filters", required=True)
-    clean_path = resolve_repository_input(clean_path, "no_need")
-    assert filter_path is not None
+    filter_path = Path(filter_path) if filter_path is not None and Path(filter_path).is_file() else None
+    clean_path = Path(clean_path) if clean_path is not None and Path(clean_path).is_file() else None
 
     if normalized_scope == "all":
         clean_salespeople = discover_salespeople_from_paths(
@@ -632,7 +652,7 @@ def run_suggested_batched_from_paths(
                         "stock_path": str(Path(stock_path).resolve()),
                         "profile_perm_path": str(Path(profile_perm_path).resolve()) if profile_perm_path else None,
                         "profile_temp_path": str(Path(profile_temp_path).resolve()) if profile_temp_path else None,
-                        "filter_path": str(Path(filter_path).resolve()),
+                        "filter_path": str(Path(filter_path).resolve()) if filter_path else None,
                         "clean_path": str(Path(clean_path).resolve()) if clean_path else None,
                         "sales_history_paths": [str(path.resolve()) for path in history_paths],
                         "runtime_overrides": _json_safe(batch_runtime),
@@ -910,7 +930,7 @@ def _run_batch_spec(spec_path: Path) -> int:
             stock_path=Path(spec["stock_path"]),
             profile_perm_path=Path(spec["profile_perm_path"]) if spec.get("profile_perm_path") else None,
             profile_temp_path=Path(spec["profile_temp_path"]) if spec.get("profile_temp_path") else None,
-            filter_path=Path(spec["filter_path"]),
+            filter_path=Path(spec["filter_path"]) if spec.get("filter_path") else None,
             clean_path=Path(spec["clean_path"]) if spec.get("clean_path") else None,
             sales_history_paths=[Path(path) for path in spec.get("sales_history_paths", [])],
             runtime_overrides=dict(spec.get("runtime_overrides") or {}),

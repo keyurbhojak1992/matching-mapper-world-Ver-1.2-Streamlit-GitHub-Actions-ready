@@ -32,6 +32,16 @@ def _materialize_rule_file(
     destination = work / destination_name
     if uploaded_bytes is not None:
         return write_bytes(destination, uploaded_bytes)
+    if default_key in {"filters", "no_need"}:
+        from defaults.suggested_rules import DEFAULT_FILTER_RULES, DEFAULT_NO_NEED_RULES
+
+        tables = DEFAULT_FILTER_RULES if default_key == "filters" else DEFAULT_NO_NEED_RULES
+        with pd.ExcelWriter(destination, engine="openpyxl") as writer:
+            for sheet_name, payload in tables.items():
+                frame = pd.DataFrame(payload.get("rows", []), columns=payload.get("columns", []))
+                frame.to_excel(writer, index=False, sheet_name=sheet_name)
+        return destination
+
     source = resolve_repository_input(None, default_key, required=True)
     assert source is not None
     shutil.copy2(source, destination)

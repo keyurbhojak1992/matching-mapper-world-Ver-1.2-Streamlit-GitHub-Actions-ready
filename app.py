@@ -465,7 +465,7 @@ def suggested_page() -> None:
         st.caption(
             "Stock Actual must be uploaded. Omitted profiles/rule files use: "
             "data/PARTY_PROFILE_PERM.parquet, data/PARTY_PROFILE_TEMP.parquet, "
-            "data/filters - EBID.xlsx, and data/no_need.xlsx."
+            "built-in filter/no-need dictionaries. Uploads override those defaults."
         )
 
         discovery_identity = (
@@ -803,8 +803,6 @@ def suggested_page() -> None:
     missing: list[str] = []
     if stock is None:
         missing.append("Stock Actual")
-    if filters is None and not _repository_default_exists("filters"):
-        missing.append("Filters upload or data/filters - EBID.xlsx")
     if (
         profile_perm is None
         and profile_temp is None
@@ -812,8 +810,6 @@ def suggested_page() -> None:
         and not _repository_default_exists("profile_temp")
     ):
         missing.append("party profile file")
-    if runtime["ENABLE_CLEAN_FILE"] and no_need is None and not _repository_default_exists("no_need"):
-        missing.append("No-need upload or data/no_need.xlsx")
     if not runtime["GENERATE_MERGED_MASTER"] and not runtime["GENERATE_INDIVIDUAL_REPORTS"]:
         missing.append("at least one report format")
     if runtime["TEST_MODE"] and not runtime["TEST_SALESPEOPLE"]:
@@ -1043,8 +1039,8 @@ def pricing_last5_bid_page() -> None:
         source_rows = [
             {"Input": "Bid Summary", "Behavior": "Uploaded override" if bid_summary else ("Saved default" if default_bid_ready else "Missing")},
             {"Input": "Permanent profile", "Behavior": "Uploaded override" if profile_perm else ("Saved default" if _repository_default_exists("profile_perm") else "Skipped")},
-            {"Input": "Filters", "Behavior": "Uploaded override" if filters else ("Saved default" if _repository_default_exists("filters") else "Skipped")},
-            {"Input": "No-need rules", "Behavior": "Uploaded override" if no_need else ("Saved default" if _repository_default_exists("no_need") else "Skipped")},
+            {"Input": "Filters", "Behavior": "Uploaded override" if filters else "Built-in dictionary"},
+            {"Input": "No-need rules", "Behavior": "Uploaded override" if no_need else "Built-in dictionary"},
             {"Input": "Sales history", "Behavior": f"{len(sales_history or [])} uploaded" if sales_history else "Skipped"},
         ]
         st.dataframe(source_rows, hide_index=True, width="stretch")
@@ -2159,7 +2155,7 @@ def bid_drop_page() -> None:
         )
 
     st.caption(
-        "When omitted, Filters uses data/filters - EBID.xlsx and No-need uses data/no_need.xlsx."
+        "When omitted, Filters and No-need rules use the built-in dictionaries. Uploaded workbooks override them."
     )
 
     missing = []
@@ -2171,10 +2167,6 @@ def bid_drop_page() -> None:
         missing.append("at least one Sales & Actions workbook")
     if stock is None:
         missing.append("Stock Actual workbook")
-    if filters is None and not _repository_default_exists("filters"):
-        missing.append("Filters upload or data/filters - EBID.xlsx")
-    if no_need is None and not _repository_default_exists("no_need"):
-        missing.append("No-need upload or data/no_need.xlsx")
 
     if st.button(
         "Run BID drop checking",

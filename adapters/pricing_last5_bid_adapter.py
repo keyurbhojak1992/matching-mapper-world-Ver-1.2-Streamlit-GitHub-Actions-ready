@@ -17,7 +17,7 @@ from .common import repository_data_path, safe_filename
 
 PRICING_LAST5_DEFAULTS: dict[str, object] = {
     "TOLERANCE_LEVEL": 1,
-    "ENABLE_FLO_MAPPING": False,
+    "ENABLE_FLO_MAPPING": True,
     "INCLUDE_COLOR": True,
     "INCLUDE_CLARITY": True,
     "INCLUDE_FLORO": True,
@@ -549,7 +549,7 @@ def run_pricing_last5_bid_suggested(
 
     # Import lazily so Bid Summary preparation remains independently testable;
     # the deployed app already includes pyarrow for the preserved Suggested adapter.
-    from .suggested_adapter import run_suggested_process
+    from .suggested_adapter import PRICING_MASTER_PATH, run_suggested_process
 
     raw_zip, _raw_name, engine_logs = run_suggested_process(
         stock_bytes=stock_bytes,
@@ -559,6 +559,7 @@ def run_pricing_last5_bid_suggested(
         clean_bytes=clean_bytes,
         sales_history_files=sales_history_files,
         runtime_overrides=runtime,
+        master_path=PRICING_MASTER_PATH,
     )
 
     date_label = run_dt.strftime("%Y-%m-%d")

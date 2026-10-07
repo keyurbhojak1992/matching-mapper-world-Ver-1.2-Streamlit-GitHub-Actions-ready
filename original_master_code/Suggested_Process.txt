@@ -92,7 +92,7 @@ TEST_MODE = True
 #TEST_SALESPEOPLE = ["Mr. Bhavik Hadiya", "Mr. Dhaval Moradiya", "Mr. Parva Shah", "Mr. Hiren Rathod", "Mr. Jagdish Tarsariya", "Mr. Shubham Patil", "Mr. Nikunj Shankar", "Mr. Shubham Tarsariya"]
 
 ## USE For Master Merge file
-TEST_SALESPEOPLE = ["Mr. Bhavik Hadiya", "Mr. Dhaval Moradiya", "Mr. Parva Shah", "Mr. Hiren Rathod", "Mr. Jagdish Tarsariya", "Mr. Shubham Patil", "Mr. Aakash Parmar", "Mr. Aatish Sarodiya", "Mr. Amit Tarsaria", "Mr. Hrithik Hundia", "Mr. Kalash Sanghavi", "Mr. Mukul Shah", "Mr. Nikunj Shankar", "Mr. Shubham Tarsariya", "Mr. Sunil Bhatiya", "Ms. Sonali Sonavane", "Ms. Zeal Harsora", "Mr. Vivek Chalodiya", "Mr. Ridham Lakhani", "Mr. Pranav Chalodiya"]
+TEST_SALESPEOPLE = ["Mr. Bhavik Hadiya", "Mr. Dhaval Moradiya", "Mr. Parva Shah", "Mr. Hiren Rathod", "Mr. Jagdish Tarsariya", "Mr. Shubham Patil", "Mr. Aakash Parmar", "Mr. Aatish Sarodiya", "Mr. Amit Tarsaria", "Mr. Hrithik Hundia", "Mr. Kalash Sanghavi", "Mr. Mukul Shah", "Mr. Nikunj Shankar", "Mr. Shubham Tarsariya", "Mr. Sunil Bhatiya", "Ms. Zeal Harsora", "Mr. Ridham Lakhani", "Mr. Pranav Chalodiya"]
 
 #Single Specific User
 #TEST_SALESPEOPLE = ["Ms. Zeal Harsora"]
@@ -623,71 +623,79 @@ def parse_filter_value(filter_string, order_list=None, apply_flo_mapping=False):
         values.append(filter_string)
     return list(set(values))
 
-def load_filter_data(filter_file_path):
+def _builtin_rule_sheet(rule_group, sheet_name):
+    """Return one repository-independent default rule sheet as a DataFrame."""
+    from defaults.suggested_rules import DEFAULT_FILTER_RULES, DEFAULT_NO_NEED_RULES
+    source = DEFAULT_FILTER_RULES if rule_group == "filters" else DEFAULT_NO_NEED_RULES
+    payload = source.get(sheet_name, {"columns": [], "rows": []})
+    return pd.DataFrame(payload.get("rows", []), columns=payload.get("columns", []))
+
+
+def load_filter_data(filter_file_path=None):
     removed_parties = []
     change_format_filters = pd.DataFrame()
     tolerance_df = pd.DataFrame()
 
-    print(f"\n--- Loading Filter File: {os.path.basename(filter_file_path)} ---")
-
-    if not os.path.exists(filter_file_path):
-        print(f"❌ ERROR: Filter file DOES NOT EXIST at {filter_file_path}")
-        return removed_parties, change_format_filters, tolerance_df
+    filter_path = str(filter_file_path or "")
+    use_uploaded_file = bool(filter_path) and os.path.isfile(filter_path) and os.path.getsize(filter_path) > 0
+    source_label = os.path.basename(filter_path) if use_uploaded_file else "built-in dictionary"
+    print(f"\n--- Loading Filter Rules: {source_label} ---")
 
     try:
-        xl = pd.ExcelFile(filter_file_path)
-        if "Removed Party" in xl.sheet_names:
-            removed_parties_df = pd.read_excel(filter_file_path, sheet_name="Removed Party")
-            if "Sold Party" in removed_parties_df.columns:
-                removed_parties = removed_parties_df["Sold Party"].dropna().apply(normalize_party_name).tolist()
-            print(f"  ✅ 'Removed Party' sheet: Loaded {len(removed_parties)} rules.")
+        if use_uploaded_file:
+            xl = pd.ExcelFile(filter_path)
+            removed_parties_df = pd.read_excel(filter_path, sheet_name="Removed Party") if "Removed Party" in xl.sheet_names else pd.DataFrame()
+            change_format_filters = pd.read_excel(filter_path, sheet_name="Change Format") if "Change Format" in xl.sheet_names else pd.DataFrame()
+            tolerance_df = pd.read_excel(filter_path, sheet_name="Tolerance") if "Tolerance" in xl.sheet_names else pd.DataFrame()
+        else:
+            removed_parties_df = _builtin_rule_sheet("filters", "Removed Party")
+            change_format_filters = _builtin_rule_sheet("filters", "Change Format")
+            tolerance_df = _builtin_rule_sheet("filters", "Tolerance")
 
-        if "Change Format" in xl.sheet_names:
-            change_format_filters = pd.read_excel(filter_file_path, sheet_name="Change Format")
+        if not removed_parties_df.empty:
+            removed_parties_df.columns = removed_parties_df.columns.str.strip()
+            sold_party_col = next((c for c in removed_parties_df.columns if c.strip().upper() == "SOLD PARTY"), None)
+            if sold_party_col:
+                removed_parties = removed_parties_df[sold_party_col].dropna().apply(normalize_party_name).tolist()
+        print(f"  ✅ 'Removed Party' rules: Loaded {len(removed_parties)} rules.")
+
+        if not change_format_filters.empty:
             change_format_filters.columns = change_format_filters.columns.str.strip().str.upper()
             if "SOLD PARTY" in change_format_filters.columns:
                 change_format_filters['NORMALIZED PARTY'] = change_format_filters['SOLD PARTY'].apply(normalize_party_name)
             if "SALES_PERSON" in change_format_filters.columns:
                 change_format_filters['SALES_PERSON'] = change_format_filters['SALES_PERSON'].astype(str).str.strip().str.title()
-            print(f"  ✅ 'Change Format' sheet: Loaded {len(change_format_filters)} advanced rules.")
+        print(f"  ✅ 'Change Format' rules: Loaded {len(change_format_filters)} advanced rules.")
 
-        if "Tolerance" in xl.sheet_names:
-            tolerance_df = pd.read_excel(filter_file_path, sheet_name="Tolerance")
+        if not tolerance_df.empty:
             tolerance_df.columns = tolerance_df.columns.str.strip().str.upper()
             if "SOLD PARTY" in tolerance_df.columns:
                 tolerance_df['NORMALIZED PARTY'] = tolerance_df['SOLD PARTY'].apply(normalize_party_name)
             if "SALES_PERSON" in tolerance_df.columns:
                 tolerance_df['SALES_PERSON'] = tolerance_df['SALES_PERSON'].astype(str).str.strip().str.title()
-            print(f"  ✅ 'Tolerance' sheet: Loaded {len(tolerance_df)} tolerance rules.")
-
+        print(f"  ✅ 'Tolerance' rules: Loaded {len(tolerance_df)} tolerance rules.")
     except Exception as e:
-        print(f"❌ CRITICAL ERROR reading {filter_file_path}: {e}")
+        print(f"❌ CRITICAL ERROR loading filter rules from {source_label}: {e}")
 
     return removed_parties, change_format_filters, tolerance_df
 
-def load_exclusion_data(clean_file_path):
+def load_exclusion_data(clean_file_path=None):
     exclusion_df = pd.DataFrame()
-
-    print(f"--- Loading Clean (No Need) File: {os.path.basename(clean_file_path)} ---")
+    clean_path = str(clean_file_path or "")
+    use_uploaded_file = bool(clean_path) and os.path.isfile(clean_path) and os.path.getsize(clean_path) > 0
+    source_label = os.path.basename(clean_path) if use_uploaded_file else "built-in dictionary"
+    print(f"--- Loading Clean (No Need) Rules: {source_label} ---")
 
     try:
-        if not os.path.exists(clean_file_path):
-            print(f"❌ WARNING: Clean file DOES NOT EXIST at {clean_file_path}")
-            return exclusion_df
-
-        exclusion_df = pd.read_excel(clean_file_path)
+        exclusion_df = pd.read_excel(clean_path) if use_uploaded_file else _builtin_rule_sheet("no_need", "Removed")
         exclusion_df.columns = exclusion_df.columns.str.strip().str.upper()
-
         if "SOLD PARTY" in exclusion_df.columns:
             exclusion_df['NORMALIZED PARTY'] = exclusion_df['SOLD PARTY'].apply(normalize_party_name)
-
         if "SALES_PERSON" in exclusion_df.columns:
             exclusion_df['SALES_PERSON'] = exclusion_df['SALES_PERSON'].astype(str).str.strip().str.title()
-
-        print(f"  ✅ Clean file loaded: {len(exclusion_df)} exclusion rules found.\n")
-
+        print(f"  ✅ Clean rules loaded: {len(exclusion_df)} exclusion rules found.\n")
     except Exception as e:
-        print(f"❌ CRITICAL ERROR reading {clean_file_path}: {e}\n")
+        print(f"❌ CRITICAL ERROR loading clean rules from {source_label}: {e}\n")
 
     return exclusion_df
 
