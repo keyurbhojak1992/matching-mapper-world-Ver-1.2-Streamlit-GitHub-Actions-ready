@@ -79,6 +79,7 @@ Adapters provide temporary paths, runtime overrides, Linux-compatible upload/dow
 - **Dealmaker** — invokes the supplied v8.2.2 production runner directly. Use the bundled control base or upload an updated `Dealmaker_Full_Control_v6.xlsx` for the current run.
 - **Layout Stock Matcher** — invokes the preserved layout matching source with Layout Stock, Sales, and Actions uploads.
 - **Demand Filter Mapper** — applies the preserved demand/filter process.
+- **Advanced Demand Filter** — isolated workflow based on the uploaded advanced-demand source. Stock Actual + Filters are required uploads, No Need is optional, no repository rule files are used as defaults, and large `Change Format` sheets are streamed in 5,000-rule batches with temporary disk-backed match accumulation.
 - **Sort Suggested Output** — runs the hyperlink-safe sorting process with web-configurable controls.
 - **Suggested List Splitter** — groups each salesperson's suggested workbooks into `Under 10 Stones` and `10+ Stones` ZIP folders by counting populated Serial No rows.
 - **BID Drop Checking Process** — creates a deep-gap diagnostic workbook from suggested results, bids, sales/actions, stock, filters, and exclusions.

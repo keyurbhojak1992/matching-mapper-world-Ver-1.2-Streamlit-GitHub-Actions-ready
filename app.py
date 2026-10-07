@@ -10,6 +10,7 @@ from pathlib import Path
 
 import streamlit as st
 
+from adapters.advanced_demand_filter_adapter import run_advanced_demand_filter
 from adapters.auto_pricing_adapter import ACTION_NAMES as AUTO_PRICING_ACTION_NAMES, run_auto_pricing
 from adapters.auto_pricing_pipeline_adapter import (
     AutoPricingDataError,
@@ -83,6 +84,7 @@ PAGES = [
     "Dealmaker",
     "Layout Stock Matcher",
     "Demand Filter Mapper",
+    "Advanced Demand Filter",
     "Sort Suggested Output",
     "Suggested List Splitter",
     "BID Drop Checking Process",
@@ -414,6 +416,7 @@ def overview_page() -> None:
         ("DEAL ALLOCATION", "Dealmaker", "Output: Production review ZIP"),
         ("LAYOUT MATCHING", "Layout Stock Matcher", "Output: Salesperson layout suggestions ZIP"),
         ("DEMAND RULES", "Demand Filter Mapper", "Output: Salesperson report ZIP"),
+        ("ADVANCED DEMAND", "Advanced Demand Filter", "Output: Batched salesperson report ZIP"),
         ("PRIORITIZATION", "Sort Suggested Output", "Output: Sorted suggested ZIP"),
         ("LIST SPLITTING", "Suggested List Splitter", "Output: Under 10 / 10+ ZIPs"),
         ("BID DIAGNOSTICS", "BID Drop Checking Process", "Output: Deep gap analysis XLSX"),
@@ -1865,6 +1868,121 @@ def demand_filter_page() -> None:
     _show_result("demand_result", "Download demand-filter reports ZIP")
 
 
+def advanced_demand_filter_page() -> None:
+    section_header(
+        "Large-file rule-based stock demand",
+        "Advanced Demand Filter",
+        "Run the uploaded advanced demand-filter code without changing the existing Demand Filter Mapper. Stock + Filters are required; No Need is optional and is skipped when absent.",
+        ["Upload stock", "Upload filters", "Configure matching", "Download reports"],
+    )
+
+    c1, c2, c3 = st.columns(3)
+    stock = c1.file_uploader("Stock Actual workbook *", type=["xlsx"], key="advanced_demand_stock")
+    filters = c2.file_uploader("Filters workbook *", type=["xlsx"], key="advanced_demand_filters")
+    clean_file = c3.file_uploader(
+        "No Need / Clean workbook (optional)",
+        type=["xlsx"],
+        key="advanced_demand_clean",
+        help="No repository default is used. If this upload is empty, no_need exclusion logic is skipped.",
+    )
+
+    with st.expander("Advanced Demand configuration", expanded=True):
+        row1 = st.columns(4)
+        tolerance = row1[0].number_input(
+            "Tolerance level", min_value=0, max_value=3, value=1, step=1,
+            key="advanced_demand_tolerance",
+            help="Default 1 = +/-1 tolerance.",
+        )
+        fancy_color_tolerance = row1[1].toggle(
+            "Fancy Color tolerance",
+            value=False,
+            key="advanced_demand_fancy_tolerance",
+            help="Off = exact Fancy Color only. On = use TOLERANCE_LEVEL against FANCY_COLOR_ORDER.",
+        )
+        flo_mapping = row1[2].toggle(
+            "Group VSL / SL with FNT",
+            value=False,
+            key="advanced_demand_flo_mapping",
+            help="Off keeps NON, VSL, SL and FNT distinct. On groups VSL/SL/FNT and makes NON adjacent to FNT.",
+        )
+        related_tag = row1[3].toggle(
+            "Include related Tag_No",
+            value=False,
+            key="advanced_demand_related_tag",
+            help="Adds Tag_No from the uploaded Filters workbook to output when enabled.",
+        )
+
+        row2 = st.columns([1, 1, 2])
+        clean_enabled = row2[0].toggle(
+            "Apply No Need rules",
+            value=True,
+            key="advanced_demand_clean_enabled",
+            help="If enabled but no No Need workbook is uploaded, the clean stage is skipped.",
+        )
+        match_filter_mode = row2[1].selectbox(
+            "Output status filter",
+            options=["NONE", "ALL"],
+            index=0,
+            key="advanced_demand_status_mode",
+            help="NONE keeps the base output. ALL applies the allowed Match Status list.",
+        )
+        allowed_statuses = row2[2].multiselect(
+            "Allowed Match Status",
+            options=["Exact", "Near by", "May be"],
+            default=["Exact", "Near by"],
+            key="advanced_demand_allowed_statuses",
+            disabled=match_filter_mode == "NONE",
+        )
+
+        specific_parties_text = st.text_area(
+            "Specific parties for output status filter",
+            value="NONE",
+            height=76,
+            key="advanced_demand_specific_parties",
+            disabled=match_filter_mode == "NONE",
+            help="Use NONE (or leave blank) to apply MODE=ALL to all parties. Otherwise enter party names separated by comma, semicolon, or new line.",
+        )
+
+        st.caption(
+            "Large Filters.xlsx files are streamed in 5,000-rule batches. Intermediate matches are kept on temporary disk, and stock-side indexes narrow INCLUDE rules before the source matching logic runs."
+        )
+
+    specific_parties = parse_delimited_values(specific_parties_text) or ["NONE"]
+
+    if st.button(
+        "Generate advanced demand-filter reports",
+        type="primary",
+        use_container_width=True,
+        disabled=stock is None or filters is None,
+        key="run_advanced_demand_filter",
+    ):
+        try:
+            with st.spinner("Applying advanced demand rules and generating salesperson workbooks..."):
+                data, filename, logs = run_advanced_demand_filter(
+                    stock_bytes=stock.getvalue(),
+                    filter_bytes=filters.getvalue(),
+                    clean_bytes=clean_file.getvalue() if clean_file is not None else None,
+                    runtime_overrides={
+                        "TOLERANCE_LEVEL": int(tolerance),
+                        "ENABLE_FANCY_COLOR_TOLERANCE": bool(fancy_color_tolerance),
+                        "ENABLE_FLO_MAPPING": bool(flo_mapping),
+                        "ENABLE_RELATED_TAG": bool(related_tag),
+                        "ENABLE_CLEAN_FILE": bool(clean_enabled),
+                        "MATCH_STATUS_FILTER_MODE": str(match_filter_mode),
+                        "MATCH_STATUS_ALLOWED_TYPES": list(allowed_statuses),
+                        "MATCH_STATUS_SPECIFIC_PARTIES": specific_parties,
+                    },
+                )
+                _save_result("advanced_demand_result", data, filename, logs)
+            st.rerun()
+        except Exception as exc:
+            _show_user_error("Unable to complete Advanced Demand Filter", exc)
+
+    if stock is None or filters is None:
+        st.info("Stock Actual and Filters workbooks are required. Optional files can be left blank.")
+    _show_result("advanced_demand_result", "Download advanced demand-filter reports ZIP")
+
+
 def sorting_page() -> None:
     section_header(
         "Suggested-output prioritization",
@@ -2235,6 +2353,8 @@ elif page == "Layout Stock Matcher":
     layout_stock_matcher_page()
 elif page == "Demand Filter Mapper":
     demand_filter_page()
+elif page == "Advanced Demand Filter":
+    advanced_demand_filter_page()
 elif page == "Sort Suggested Output":
     sorting_page()
 elif page == "Suggested List Splitter":
