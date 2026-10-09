@@ -130,7 +130,7 @@ def preview_auto_pricing_column_mapping(
     """
     from processors.auto_pricing_finalizer_v4_1_3.process_datasets_v4_1_3 import (
         STANDARD_SALES_HEADERS, STOCK_FINAL_HEADERS, read_final_headers,
-        schema_mapping, resolve_sales_mapping,
+        schema_mapping, resolve_standard_mapping,
     )
     previous_files = previous_files or {}
     output = []
@@ -157,19 +157,17 @@ def preview_auto_pricing_column_mapping(
                 book.close()
         else:
             targets = ACTION_HEADERS[dataset]
+        # Preflight only needs the header row. Read every source directly from
+        # uploaded bytes: no /mnt/data path or scratch workbook must be writable.
+        book = load_workbook(io.BytesIO(payload), read_only=True, data_only=True)
+        try:
+            raw_header = next(book.active.iter_rows(max_row=1, values_only=True), ())
+            source_headers = [str(v).strip() if v is not None else '' for v in raw_header]
+        finally:
+            book.close()
         if dataset == 'Sales':
-            # Sales has its own conservative date profiling when alias matching is insufficient.
-            with tempfile.TemporaryDirectory(prefix='sales_map_preview_') as tmp:
-                path = Path(tmp) / 'SALE_DATA.xlsx'
-                path.write_bytes(payload)
-                _, rows = resolve_sales_mapping(path, targets, overrides=column_overrides)
+            _, rows = resolve_standard_mapping('Sales', targets, source_headers, overrides=column_overrides)
         else:
-            book = load_workbook(io.BytesIO(payload), read_only=True, data_only=True)
-            try:
-                raw_header = next(book.active.iter_rows(max_row=1, values_only=True), ())
-                source_headers = [str(v).strip() if v is not None else '' for v in raw_header]
-            finally:
-                book.close()
             rows = schema_mapping(dataset, targets, source_headers, overrides=column_overrides)
         for row in rows:
             target = row['Final Column']

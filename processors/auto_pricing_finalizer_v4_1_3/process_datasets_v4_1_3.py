@@ -18,8 +18,9 @@ from openpyxl.styles.numbers import is_date_format
 VERSION = '4.1.9-optional-pricing-fields'
 RAW_DIR = Path(os.environ.get('RAW_DATA_DIR', '/mnt/data/raw_inputs'))
 FINAL_DIR = Path(os.environ.get('FINAL_HISTORY_DIR', '/mnt/data/final_samples'))
+# Do not create output directories when imported for a read-only mapping preview.
+# Streamlit Cloud may not allow writes to the legacy /mnt/data default path.
 OUT_DIR = Path(os.environ.get('OUTPUT_DIR', '/mnt/data/output_final'))
-OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 ACTIVITY_DAYS = 90
 HOLD_DAYS = 90
@@ -1707,6 +1708,9 @@ def write_audit(audit, path: Path):
 
 
 def main():
+    # The pipeline sets OUTPUT_DIR to a writable per-run temporary directory.
+    # Only an actual processing run needs this directory, never an import.
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
     audit = {'summary': [], 'mapping': [], 'blanks': [], 'issues': []}
     ok_flags = []
     cart_raw = locate([r'ADD[_ -]?TO[_ -]?CART', r'Cart'], RAW_DIR)
