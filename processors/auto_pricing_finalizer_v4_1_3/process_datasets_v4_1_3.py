@@ -15,7 +15,7 @@ import os
 from difflib import SequenceMatcher
 from openpyxl.styles.numbers import is_date_format
 
-VERSION = '4.1.7'
+VERSION = '4.1.9-optional-pricing-fields'
 RAW_DIR = Path(os.environ.get('RAW_DATA_DIR', '/mnt/data/raw_inputs'))
 FINAL_DIR = Path(os.environ.get('FINAL_HISTORY_DIR', '/mnt/data/final_samples'))
 OUT_DIR = Path(os.environ.get('OUTPUT_DIR', '/mnt/data/output_final'))
@@ -154,15 +154,57 @@ ASHWIN BHAI   SHANKAR
 CONTROL_RE = re.compile(r'[\x00-\x1f]')
 SPACE_RE = re.compile(r' +')
 DERIVED_COLUMNS = {'Carat_Grp', 'Amt', 'Tag'}
-OPTIONAL_SALES_RAW_COLUMNS = {'SPer'}  # not used by Auto Pricing calculations; preserve history when RAW omits it
+# Only missing columns that affect the builder's calculations or safe record-window
+# processing may block. Other fields stay in the stable output schema as blanks,
+# are shown in the audit, and can still be explicitly mapped by the user.
+AUTO_PRICING_REQUIRED_COLUMNS = {
+    'Cart': {'CREATED_DATETIME', 'Serial No', 'Sold Party'},
+    'Offer': {'CREATED_DATETIME', 'Serial No', 'Sold Party'},
+    'Wishlist': {'CREATED_DATETIME', 'Serial No', 'Sold Party'},
+    'Hold': {'JANGAD_DATE', 'SERIAL_NO', 'Sold Party'},
+    'View': {'APPOINTMENT_DATE', 'SERIAL_NO', 'Sold Party'},
+    # Pricing tag, weighted average, sales count and buyer metrics depend on these.
+    'Sales': {'Serial No', 'Shp', 'Carat', 'Col', 'Qua', 'Lab', 'Flo',
+              'Sold Party', 'Sale Date', 'SRate'},
+    # GRap and GPer are only mandatory when Expected must be calculated.
+    'Stock': {'Serial No', 'Shp', 'Carat', 'Color name', 'Qua', 'Lab', 'Flo', 'Expected'},
+}
+
+
+def pricing_required_column(dataset: str, target: str, resolved=None) -> bool:
+    if target in DERIVED_COLUMNS or norm_header(target) in LEGACY_FINAL_COLUMNS:
+        return False
+    if dataset == 'Stock' and target in {'GRap', 'GPer'}:
+        return 'Expected' not in (resolved or {})
+    return target in AUTO_PRICING_REQUIRED_COLUMNS.get(dataset, set())
+
+
+def missing_mapping_rows(rows):
+    return [r for r in rows if r['Status'] == 'MISSING']
+
+
+def record_mapping_issues(audit, dataset, rows, raw_path):
+    for r in rows:
+        if r['Status'] not in {'MISSING', 'OPTIONAL_MISSING'}:
+            continue
+        blocking = r['Status'] == 'MISSING'
+        add_issue(audit, dataset, 'ERROR' if blocking else 'WARNING',
+                  'Missing required pricing/source column' if blocking else 'Optional source column missing',
+                  source_label(raw_path), column=r['Final Column'],
+                  details=(('Processing must not proceed without this business-date, record key or pricing input. ')
+                           if blocking else ('Not used by pricing calculations, activity matching or processing windows. '
+                                               'New source records retain a blank for this output field. '))
+                          + f"Expected headers: {r['Candidate Raw Columns']}")
 STOCK_FINAL_HEADERS = ['Serial No', 'Shp', 'Carat', 'Carat_Grp', 'Color name', 'Qua', 'Cut', 'Pol', 'Sym', 'Lab', 'Flo', 'GRap', 'GPer', 'Expected', 'Tag']
 LEGACY_FINAL_COLUMNS = {'date'}  # Obsolete helper column; never used for current-date/window logic.
 MAPPING_FILE = Path(os.environ.get('COLUMN_MAPPING_FILE', str(Path(__file__).with_name('column_mapping_aliases.json'))))
+OVERRIDE_FILE = os.environ.get('COLUMN_MAPPING_OVERRIDE_FILE', '')
+PARTY_CODE_MASTER_FILE = os.environ.get('PARTY_CODE_MASTER_FILE', '')
 
 ALIASES = {
     'Hold': {
         'SERIAL_NO': ['SERIAL_NO', 'Serial No', 'STONE_ID'],
-        'JANGAD_DATE': ['JANGAD_DATE', 'Date', 'date'],
+        'JANGAD_DATE': ['JANGAD_DATE', 'Jangad Date', 'Hold Date'],
         'PARTY_CODE': ['PARTY_CODE', 'Party Code'],
         'Sold Party': ['Sold Party', 'PARTY_NAME', 'Party Name'],
     },
@@ -192,7 +234,7 @@ ALIASES = {
         'Lab': ['Lab', 'Laboratory', 'LAB_NAME', 'LABORATORY'],
         'Flo': ['Flo', 'FL', 'Fluorescence', 'Fluor', 'FL_NAME', 'GFL_NAME', 'G_FL'],
         'Sold Party': ['Sold Party', 'Sold To', 'Buyer', 'Customer', 'Customer Name', 'Client', 'Party', 'PARTY_NAME', 'Party Name', 'pary name'],
-        'Sale Date': ['Sale Date', 'Sales Date', 'Sold Date', 'Date Sold', 'S date', 'S_DATE', 'SDATE', 'SALE_DATE', 'SALE_DT', 'SALES_DATE', 'SOLD_DATE', 'Invoice Date', 'Bill Date', 'Transaction Date', 'Txn Date'],
+        'Sale Date': ['Sale Date', 'Sales Date', 'Sold Date', 'Date Sold', 'S date', 'S_DATE', 'SDATE', 'SALE_DATE', 'SALE_DT', 'SALES_DATE', 'SOLD_DATE'],
         'SPer': ['SPer', 'SALE_PER', 'Sale %', 'Sale Percent', 'Discount %', 'Discount', 'S.%', 'S%', 'SALEPER', 'Sale Per'],
         'SRate': ['SRate', 'Rate', 'Sale Rate', 'Sales Rate', 'SALE_RATE', 'S RATE', 'SRATE', 'PRICE_RATE'],
     },
@@ -201,7 +243,7 @@ ALIASES = {
         'Carat': ['Carat', 'CTS', 'WEIGHT'], 'Color name': ['Color name', 'Color', 'Col'],
         'Qua': ['Qua', 'Quality', 'Clarity'], 'Cut': ['Cut'], 'Pol': ['Pol'], 'Sym': ['Sym'],
         'Lab': ['Lab'], 'Flo': ['Flo', 'FL'], 'GRap': ['GRap', 'RAP'],
-        'GPer': ['GPer', 'GPER', 'G.%'], 'Expected': ['Expected', 'Exp rate', 'Expected Rate', 'EXP_RATE'],
+        'GPer': ['GPer', 'GPER', 'G.%'], 'Expected': ['Expected', 'Exp rate', 'Expected Rate', 'EXP_RATE', 'EXP AMT'],
     }
 }
 
@@ -393,6 +435,102 @@ def _external_aliases():
         return {}
 
 
+def verified_mapping_overrides() -> dict:
+    """Only a user-approved, per-run JSON mapping may resolve unknown headers."""
+    if not OVERRIDE_FILE:
+        return {}
+    data = json.loads(Path(OVERRIDE_FILE).read_text(encoding='utf-8'))
+    if not isinstance(data, dict) or any(not isinstance(v, dict) for v in data.values()):
+        raise ValueError('Column mapping overrides must be {dataset: {final_column: raw_header}}')
+    return data
+
+
+def _safe_override(dataset: str, target: str, raw: str):
+    if dataset == 'Hold' and target == 'PARTY_CODE' and norm_header(raw) in {'partyname', 'soldparty', 'paryname'}:
+        raise ValueError('PARTY_CODE cannot be taken from Party Name; provide a verified party-code source')
+    # Different business dates must not be conflated by an unreviewed heuristic.
+    if (target in {'CREATED_DATETIME', 'JANGAD_DATE', 'APPOINTMENT_DATE', 'Sale Date'}
+        and norm_header(raw) in {'date', 'createddatetime'} and target in {'JANGAD_DATE', 'APPOINTMENT_DATE', 'Sale Date'}):
+        raise ValueError(f'{dataset}.{target}: {raw!r} is not an authoritative business date')
+
+
+def resolve_standard_mapping(dataset: str, final_headers: list[str], raw_headers: list[str], overrides=None):
+    """Exact approved alias -> explicit override -> suggestion only; one-to-one source mapping."""
+    overrides = verified_mapping_overrides().get(dataset, {}) if overrides is None else overrides.get(dataset, {})
+    if not isinstance(overrides, dict):
+        raise ValueError('Mappings must be a dictionary per dataset')
+    unknown_targets = set(overrides) - set(final_headers)
+    if unknown_targets:
+        raise ValueError(f'{dataset}: mapping references unknown final columns {sorted(unknown_targets)}')
+    raw_headers = [clean_text(str(h)) for h in raw_headers if h and clean_text(str(h))]
+    normalized = defaultdict(list)
+    for h in raw_headers: normalized[norm_header(h)].append(h)
+    used = set()
+    resolved = {}
+    rows = []
+    for target in final_headers:
+        aliases = candidates_for(dataset, target)
+        if target in DERIVED_COLUMNS:
+            rows.append({'Dataset':dataset, 'Final Column':target, 'Candidate Raw Columns':'', 'Raw Columns Found':'',
+                         'Status':'DERIVED', 'Rule':'Calculated in output', 'Mapping Method':'DERIVED', 'Confidence':1.0})
+            continue
+        selected = None
+        method = 'EXACT_ALIAS'
+        if target in overrides:
+            chosen = clean_text(str(overrides[target]))
+            _safe_override(dataset, target, chosen)
+            found = normalized.get(norm_header(chosen), [])
+            if len(found) == 1:
+                selected = found[0]
+                method = 'APPROVED_OVERRIDE'
+            else:
+                method = 'OVERRIDE_NOT_FOUND'
+        else:
+            # Canonical target always precedes aliases, regardless of RAW file order.
+            for alias in [target] + [a for a in aliases if norm_header(a) != norm_header(target)]:
+                found = normalized.get(norm_header(alias), [])
+                if found:
+                    selected = found[0]
+                    if len(found) > 1: method = 'DUPLICATE_HEADER'
+                    break
+        if selected and (selected in used or len(normalized[norm_header(selected)]) > 1):
+            method = 'CONFLICT'
+        if selected and method != 'CONFLICT':
+            used.add(selected)
+            resolved[target] = selected
+            rows.append({'Dataset':dataset,'Final Column':target,'Candidate Raw Columns':' | '.join(aliases),
+                         'Raw Columns Found':selected,'Status':'OK','Rule':'Approved column mapping',
+                         'Mapping Method':method,'Confidence':1.0,'Suggestion':''})
+        else:
+            scores = []
+            for source in raw_headers:
+                if source in used: continue
+                ns = norm_header(source)
+                if len(ns)<4:continue
+                score = max((SequenceMatcher(None,ns,norm_header(a)).ratio() for a in aliases if len(norm_header(a))>=4),default=0)
+                if score >= .75: scores.append((score, source))
+            scores.sort(reverse=True)
+            suggested = scores[0][1] if scores and scores[0][0] >= .80 else ''
+            status = 'MISSING'
+            rows.append({'Dataset':dataset, 'Final Column':target,'Candidate Raw Columns':' | '.join(aliases),
+                         'Raw Columns Found':'','Status':status,
+                         'Rule':('Duplicate header/source conflict; remove ambiguity' if method=='CONFLICT'
+                                 else 'Unknown field: approve a mapping to avoid an incorrect substitution'),
+                         'Mapping Method':method if method != 'EXACT_ALIAS' else 'UNMAPPED',
+                         'Confidence':round(scores[0][0],3) if scores else 0.0,
+                         'Suggestion':suggested})
+    # Classify after resolving ALL fields so Stock can derive Expected from GRap/GPer
+    # if a direct Expected source column was not provided.
+    for row in rows:
+        required = pricing_required_column(dataset, row['Final Column'], resolved)
+        row['Pricing Impact'] = 'REQUIRED' if required else 'OPTIONAL'
+        if row['Status'] == 'MISSING' and not required:
+            row['Status'] = 'OPTIONAL_MISSING'
+            row['Rule'] = ('Not needed for Auto Pricing calculation/keys/date windows. '
+                           'Blank in new output records unless an approved mapping is supplied.')
+    return resolved, rows
+
+
 def candidates_for(dataset: str, target: str):
     built_in = list(ALIASES.get(dataset, {}).get(target, [target]))
     extra = _external_aliases().get(dataset, {}).get(target, [])
@@ -539,88 +677,10 @@ def _best_fuzzy_sales_header(target: str, raw_headers: list[str], used: set[str]
     return best
 
 
-def resolve_sales_mapping(raw_path: Path, final_headers: list[str] | None = None):
-    """Resolve RAW Sales headers once, then map every row to fixed canonical final names."""
-    final_headers = list(final_headers or STANDARD_SALES_HEADERS)
-    raw_headers = read_headers(raw_path)
-    by_norm = defaultdict(list)
-    for h in raw_headers:
-        if h:
-            by_norm[norm_header(h)].append(h)
-    resolved = {}
-    used = set()
-    rows = []
-
-    # Pass 1: exact alias match (case/space/punctuation insensitive).
-    for target in final_headers:
-        if target in DERIVED_COLUMNS:
-            rows.append({'Dataset': 'Sales', 'Final Column': target, 'Candidate Raw Columns': '', 'Raw Columns Found': '',
-                         'Status': 'DERIVED', 'Rule': 'Calculated in output', 'Mapping Method': 'DERIVED', 'Confidence': 1.0})
-            continue
-        found = []
-        for cand in candidates_for('Sales', target):
-            found.extend(by_norm.get(norm_header(cand), []))
-        found = [h for h in dict.fromkeys(found) if h not in used]
-        if found:
-            source = found[0]
-            resolved[target] = source
-            used.add(source)
-            rows.append({'Dataset': 'Sales', 'Final Column': target, 'Candidate Raw Columns': ' | '.join(candidates_for('Sales', target)),
-                         'Raw Columns Found': source, 'Status': 'OK', 'Rule': 'Canonical alias match; first nonblank source value used',
-                         'Mapping Method': 'EXACT_ALIAS', 'Confidence': 1.0})
-
-    # Pass 2: special Sale Date detection from actual values/Excel date formatting.
-    if 'Sale Date' not in resolved and 'Sale Date' in final_headers:
-        source, confidence, method = detect_sale_date_column(raw_path, raw_headers, used)
-        if source:
-            resolved['Sale Date'] = source
-            used.add(source)
-            rows = [r for r in rows if r['Final Column'] != 'Sale Date']
-            rows.append({'Dataset': 'Sales', 'Final Column': 'Sale Date', 'Candidate Raw Columns': ' | '.join(candidates_for('Sales', 'Sale Date')),
-                         'Raw Columns Found': source, 'Status': 'OK',
-                         'Rule': 'Unknown header recognized from date-like cell values and/or Excel date number format',
-                         'Mapping Method': method, 'Confidence': round(confidence, 4)})
-
-    # Pass 3: semantic header hints, then conservative fuzzy alias matching.
-    for target in final_headers:
-        if target in DERIVED_COLUMNS or target in resolved:
-            continue
-        chosen = None
-        method = None
-        confidence = 0.0
-        hints = SALES_HEADER_HINTS.get(target, ())
-        for raw in raw_headers:
-            if raw in used:
-                continue
-            nr = norm_header(raw)
-            if nr and any(hint in nr for hint in hints):
-                chosen = raw
-                method = 'HEADER_HINT'
-                confidence = 0.90
-                break
-        if chosen is None:
-            fuzzy = _best_fuzzy_sales_header(target, raw_headers, used)
-            if fuzzy:
-                confidence, chosen, _alias = fuzzy
-                method = 'FUZZY_ALIAS'
-        if chosen:
-            resolved[target] = chosen
-            used.add(chosen)
-            rows.append({'Dataset': 'Sales', 'Final Column': target, 'Candidate Raw Columns': ' | '.join(candidates_for('Sales', target)),
-                         'Raw Columns Found': chosen, 'Status': 'OK', 'Rule': 'Alternate header normalized to canonical final name',
-                         'Mapping Method': method, 'Confidence': round(confidence, 4)})
-        else:
-            optional = target in OPTIONAL_SALES_RAW_COLUMNS
-            rows.append({'Dataset': 'Sales', 'Final Column': target, 'Candidate Raw Columns': ' | '.join(candidates_for('Sales', target)),
-                         'Raw Columns Found': '', 'Status': 'OPTIONAL_MISSING' if optional else 'MISSING',
-                         'Rule': ('Optional RAW field not supplied; preserve previous-history value on overlaps and leave blank on new rows'
-                                  if optional else 'No safe exact/semantic/fuzzy mapping found; processor fails rather than guessing'),
-                         'Mapping Method': 'OPTIONAL_MISSING' if optional else 'MISSING', 'Confidence': 0.0})
-
-    # Preserve canonical final column order in audit.
-    order = {h: i for i, h in enumerate(final_headers)}
-    rows.sort(key=lambda r: order.get(r['Final Column'], 999))
-    return resolved, rows
+def resolve_sales_mapping(raw_path: Path, final_headers: list[str] | None = None, overrides=None):
+    """Sales uses the same safe resolver as every dataset; no fuzzy auto-assignment."""
+    headers = list(final_headers or STANDARD_SALES_HEADERS)
+    return resolve_standard_mapping('Sales', headers, read_headers(raw_path), overrides=overrides)
 
 
 def map_row_with_sources(row: dict, source_map: dict[str, str], final_headers: list[str]):
@@ -670,27 +730,10 @@ def locate_sales(root: Path):
     raise FileNotFoundError(f'No Sales-like workbook found in {root}; filename may vary, but a date-like Sales column and Sales field structure are required.')
 
 
-def map_row(row: dict, dataset: str, final_headers: list[str]):
-    nmap = defaultdict(list)
-    for k, v in row.items():
-        nk = norm_header(k)
-        if nk: nmap[nk].append((k, v))
-    out = {}
-    source_used = {}
-    for target in final_headers:
-        if target in DERIVED_COLUMNS: continue
-        chosen = None
-        chosen_source = None
-        for cand in candidates_for(dataset, target):
-            for source_name, value in nmap.get(norm_header(cand), []):
-                if not is_blank(value):
-                    chosen = clean_value(value)
-                    chosen_source = source_name
-                    break
-            if chosen_source is not None: break
-        out[target] = chosen
-        source_used[target] = chosen_source
-    return out, source_used
+def map_row(row: dict, dataset: str, final_headers: list[str], source_map=None):
+    if source_map is None:
+        source_map, _ = resolve_standard_mapping(dataset, final_headers, list(row))
+    return map_row_with_sources(row, source_map, final_headers)
 
 
 def party_rejected(rec: dict) -> bool:
@@ -744,22 +787,14 @@ def final_path(name: str):
     raise FileNotFoundError(f'Missing previous final/history file: {name}')
 
 
-def schema_mapping(dataset: str, final_headers: list[str], raw_headers: list[str]):
-    raw_norm_to_names = defaultdict(list)
-    for h in raw_headers: raw_norm_to_names[norm_header(h)].append(h)
-    rows = []
-    for target in final_headers:
-        if target in DERIVED_COLUMNS:
-            rows.append({'Dataset': dataset, 'Final Column': target, 'Candidate Raw Columns': '', 'Raw Columns Found': '',
-                         'Status': 'DERIVED', 'Rule': 'Calculated in output'})
-            continue
-        candidates = candidates_for(dataset, target)
-        found = []
-        for cand in candidates: found.extend(raw_norm_to_names.get(norm_header(cand), []))
-        found = list(dict.fromkeys(found))
-        rows.append({'Dataset': dataset, 'Final Column': target, 'Candidate Raw Columns': ' | '.join(candidates),
-                     'Raw Columns Found': ' | '.join(found), 'Status': 'OK' if found else 'MISSING',
-                     'Rule': 'First nonblank candidate used; blank/whitespace candidate is skipped'})
+def schema_mapping(dataset: str, final_headers: list[str], raw_headers: list[str], overrides=None):
+    resolved, rows = resolve_standard_mapping(dataset, final_headers, raw_headers, overrides=overrides)
+    # Stock Expected uses the existing GRap/GPer verified calculation if not supplied.
+    if dataset == 'Stock' and 'Expected' not in resolved and {'GRap','GPer'} <= set(resolved):
+        for row in rows:
+            if row['Final Column'] == 'Expected' and row['Status'] == 'MISSING':
+                row.update(Status='DERIVED', Rule='GRap/GPer calculation with numeric row validation',
+                           **{'Mapping Method':'STOCK_FORMULA', 'Suggestion':''})
     return rows
 
 
@@ -771,6 +806,12 @@ def read_history(dataset, history_path: Path, headers, date_col, audit):
     blacklist_samples = 0
     for source_row, row in rows_as_dicts(history_path):
         rec = {h: clean_value(row.get(h)) for h in headers}
+        # Previous exports sometimes contain a helper-Date-only phantom row.
+        # Never mistake that artifact for a real activity with a missing business date.
+        if all(is_blank(v) for v in rec.values()):
+            add_issue(audit, dataset, 'INFO', 'Helper-only empty history row ignored', history_path.name, source_row,
+                      details='All business fields were empty; obsolete Date helper was not used as an activity date.')
+            continue
         normalize_lab_flo(rec)
         if 'Serial No' in rec: rec['Serial No'] = serial_normalize(rec.get('Serial No'))
         if 'SERIAL_NO' in rec: rec['SERIAL_NO'] = serial_normalize(rec.get('SERIAL_NO'))
@@ -828,6 +869,26 @@ def remove_exact_output_duplicates(records: list[dict], headers: list[str]):
     return kept, removed
 
 
+def verified_party_codes(history_path: Path):
+    """Build only unambiguous party-name-to-code matches from previous Hold history."""
+    matches = defaultdict(set)
+    if history_path.is_file():
+        for _, row in rows_as_dicts(history_path):
+            name = norm_party(row.get('Sold Party'))
+            code = clean_text(str(row.get('PARTY_CODE') or ''))
+            if name and code:
+                matches[name].add(code)
+    if PARTY_CODE_MASTER_FILE:
+        master = Path(PARTY_CODE_MASTER_FILE)
+        for _, row in rows_as_dicts(master):
+            normed = {norm_header(k):v for k,v in row.items()}
+            name = norm_party(normed.get('partyname') or normed.get('soldparty'))
+            code = clean_text(str(normed.get('partycode') or ''))
+            if name and code:
+                matches[name].add(code)
+    return {name: next(iter(codes)) for name,codes in matches.items() if len(codes) == 1}
+
+
 def process_history_log(dataset: str, raw_path: Path, history_path: Path, out_name: str, date_col: str,
                         days: int, hold_mode=False, audit=None):
     """History + RAW processor with authoritative whole-boundary-date refresh.
@@ -838,14 +899,20 @@ def process_history_log(dataset: str, raw_path: Path, history_path: Path, out_na
     """
     headers = read_final_headers(history_path)
     raw_headers = read_headers(raw_path)
+    source_map, _ = resolve_standard_mapping(dataset, headers, raw_headers)
     mapping_rows = schema_mapping(dataset, headers, raw_headers)
+    if dataset == 'Hold' and 'PARTY_CODE' not in source_map and history_path.is_file():
+        for m in mapping_rows:
+            if m['Final Column'] == 'PARTY_CODE':
+                m.update(Status='OPTIONAL_LOOKUP',
+                         Rule='Best-effort verified history/master lookup. Unmatched codes remain blank; never block pricing.',
+                         **{'Mapping Method':'VERIFIED_PARTY_LOOKUP'})
     audit['mapping'].extend(mapping_rows)
-    for m in mapping_rows:
-        if m['Status'] == 'MISSING':
-            add_issue(audit, dataset, 'ERROR', 'Missing source column', source_label(raw_path), column=m['Final Column'],
-                      details=f"No raw source found. Candidates: {m['Candidate Raw Columns']}")
+    record_mapping_issues(audit, dataset, mapping_rows, raw_path)
 
     history, history_invalid, history_blacklist = read_history(dataset, history_path, headers, date_col, audit)
+    code_lookup = verified_party_codes(history_path) if dataset == 'Hold' and 'PARTY_CODE' not in source_map else {}
+    unresolved_parties = Counter()
     if history_invalid:
         summary = make_failed_summary(dataset, out_name, raw_path, history_path, date_col, f'{history_invalid} invalid history date row(s)')
         audit['summary'].append(summary)
@@ -859,7 +926,7 @@ def process_history_log(dataset: str, raw_path: Path, history_path: Path, out_na
 
     for source_row, row in rows_as_dicts(raw_path):
         raw_rows += 1
-        rec, _ = map_row(row, dataset, headers)
+        rec, _ = map_row(row, dataset, headers, source_map)
         normalize_lab_flo(rec)
         if 'Serial No' in rec: rec['Serial No'] = serial_normalize(rec.get('Serial No'))
         if 'SERIAL_NO' in rec: rec['SERIAL_NO'] = serial_normalize(rec.get('SERIAL_NO'))
@@ -882,6 +949,13 @@ def process_history_log(dataset: str, raw_path: Path, history_path: Path, out_na
                           details='Party/Sold Party matched removal list after CLEAN/TRIM.')
                 blacklist_samples += 1
             continue
+        if dataset == 'Hold' and 'PARTY_CODE' not in source_map:
+            name = norm_party(rec.get('Sold Party'))
+            code = code_lookup.get(name)
+            if code:
+                rec['PARTY_CODE'] = code
+            else:
+                unresolved_parties[name or '(BLANK PARTY NAME)'] += 1
         rec['_source_row'] = source_row
         valid_raw.append(rec)
 
@@ -936,13 +1010,24 @@ def process_history_log(dataset: str, raw_path: Path, history_path: Path, out_na
     # Remove only true full-row duplicates after merge/window filtering.
     # Similar-looking activity with any differing output field is preserved.
     filtered, exact_duplicates_removed = remove_exact_output_duplicates(filtered, headers)
+    missing_party_codes = Counter(norm_party(r.get('Sold Party')) for r in filtered if dataset=='Hold' and is_blank(r.get('PARTY_CODE')))
+    if missing_party_codes:
+        total_missing = sum(missing_party_codes.values())
+        add_issue(audit, dataset, 'WARNING', 'Optional Hold PARTY_CODE not verified', source_label(raw_path),
+                  column='PARTY_CODE',
+                  details=f'{total_missing} Hold final row(s) have no verified code across {len(missing_party_codes)} parties. '
+                          'Codes remain blank; serial and Sold Party still drive Auto Pricing. A code master is optional.')
+        for party, count in missing_party_codes.most_common(10):
+            add_issue(audit, dataset, 'INFO', 'Party code lookup not available', source_label(raw_path),
+                      column='PARTY_CODE', raw_value=party,
+                      details=f'{count} retained Hold final row(s) with blank optional code.')
     if exact_duplicates_removed:
         add_issue(audit, dataset, 'INFO', 'Exact duplicate rows removed',
                   details=f'{exact_duplicates_removed} fully identical output row(s) were removed; the first occurrence was retained.')
 
     write_standard_output(out_name, headers, filtered)
     audit_blanks(audit, dataset, headers, filtered)
-    status = 'PASS' if raw_invalid == 0 and all(m['Status'] != 'MISSING' for m in mapping_rows) else 'FAILED'
+    status = 'PASS' if raw_invalid == 0 and not missing_mapping_rows(mapping_rows) else 'FAILED'
     summary = {
         'Dataset': dataset, 'Output File': out_name, 'Raw File': source_label(raw_path), 'Previous Final File': history_path.name,
         'Source Rule': 'Previous final preserved before its latest calendar date; if RAW contains that date, the whole boundary date is replaced from RAW; later RAW dates appended. Otherwise append only after latest timestamp.',
@@ -984,12 +1069,10 @@ def process_view(raw_path: Path, history_path: Path, out_name='View.xlsx', audit
     date_col = 'APPOINTMENT_DATE'
     headers = read_final_headers(history_path)
     raw_headers = read_headers(raw_path)
+    source_map, _ = resolve_standard_mapping(dataset, headers, raw_headers)
     mapping_rows = schema_mapping(dataset, headers, raw_headers)
     audit['mapping'].extend(mapping_rows)
-    for m in mapping_rows:
-        if m['Status'] == 'MISSING':
-            add_issue(audit, dataset, 'ERROR', 'Missing source column', source_label(raw_path), column=m['Final Column'],
-                      details=f"No raw source found. Candidates: {m['Candidate Raw Columns']}")
+    record_mapping_issues(audit, dataset, mapping_rows, raw_path)
 
     # View aging and boundary refresh follow the appointment date, not the row-created timestamp.
     history, history_invalid, history_blacklist = read_history(dataset, history_path, headers, date_col, audit)
@@ -1017,7 +1100,7 @@ def process_view(raw_path: Path, history_path: Path, out_name='View.xlsx', audit
     invalid_samples = 0
     for source_row, row in rows_as_dicts(raw_path):
         raw_rows += 1
-        rec, _ = map_row(row, dataset, headers)
+        rec, _ = map_row(row, dataset, headers, source_map)
         appointment_dt = parse_datetime(rec.get(date_col))
         if appointment_dt is None:
             raw_invalid += 1
@@ -1098,7 +1181,7 @@ def process_view(raw_path: Path, history_path: Path, out_name='View.xlsx', audit
 
     write_standard_output(out_name, headers, filtered)
     audit_blanks(audit, dataset, headers, filtered)
-    status = 'PASS' if raw_invalid == 0 and all(m['Status'] != 'MISSING' for m in mapping_rows) else 'FAILED'
+    status = 'PASS' if raw_invalid == 0 and not missing_mapping_rows(mapping_rows) else 'FAILED'
     summary = {
         'Dataset': dataset, 'Output File': out_name, 'Raw File': source_label(raw_path), 'Previous Final File': history_path.name,
         'Source Rule': 'Previous final preserved before latest APPOINTMENT_DATE; boundary appointment date refreshed from RAW when present; later RAW rows appended; comma/semicolon-separated STONE_ID values split into individual SERIAL_NO rows',
@@ -1185,8 +1268,13 @@ def read_sales_history(dataset: str, history_path: Path, headers: list[str], aud
     invalid = 0
     blacklist_removed = 0
     invalid_samples = 0
-    for source_row, row in rows_as_dicts(history_path):
+    # Previous Sales 120 may store Sale Date as =INT(P2). Use Excel's cached
+    # date value; never parse the formula text as a timestamp.
+    for source_row, row in rows_as_dicts(history_path, data_only=True):
         rec = {h: clean_value(row.get(h)) for h in headers if h not in DERIVED_COLUMNS}
+        if all(is_blank(v) for v in rec.values()):
+            add_issue(audit, dataset, 'INFO', 'Helper-only empty Sales row ignored', history_path.name, source_row)
+            continue
         rec['Serial No'] = serial_normalize(rec.get('Serial No'))
         rec['Carat'] = number_normalize(rec.get('Carat'))
         rec['SPer'] = number_normalize(rec.get('SPer'))
@@ -1220,14 +1308,8 @@ def process_sales(raw_path: Path, final120: Path, final180: Path, audit=None):
     source_map, mapping_rows = resolve_sales_mapping(raw_path, union_headers)
     audit['mapping'].extend(mapping_rows)
 
-    missing = [m for m in mapping_rows if m['Status'] == 'MISSING' and m['Final Column'] not in DERIVED_COLUMNS]
-    optional_missing = [m for m in mapping_rows if m['Status'] == 'OPTIONAL_MISSING']
-    for m in optional_missing:
-        add_issue(audit, dataset, 'INFO', 'Optional Sales source column not supplied', source_label(raw_path), column=m['Final Column'],
-                  details='This field is not required for Auto Pricing metrics. Previous-history values are preserved on exact overlaps; new transactions keep it blank.')
-    for m in missing:
-        add_issue(audit, dataset, 'ERROR', 'Missing required Sales source column', source_label(raw_path), column=m['Final Column'],
-                  details=f"No raw source found. Candidates: {m['Candidate Raw Columns']}")
+    missing = missing_mapping_rows(mapping_rows)
+    record_mapping_issues(audit, dataset, mapping_rows, raw_path)
 
     if missing:
         reports = []
@@ -1454,12 +1536,10 @@ def process_stock(raw_path: Path, out_name='Stock file.xlsx', audit=None):
     # Stock is a current snapshot. It does not use or require a previous Stock workbook.
     headers = list(STOCK_FINAL_HEADERS)
     raw_headers = read_headers(raw_path)
+    source_map, _ = resolve_standard_mapping(dataset, headers, raw_headers)
     mapping_rows = schema_mapping(dataset, headers, raw_headers)
     audit['mapping'].extend(mapping_rows)
-    for m in mapping_rows:
-        if m['Status'] == 'MISSING' and m['Final Column'] not in DERIVED_COLUMNS:
-            add_issue(audit, dataset, 'ERROR', 'Missing source column', source_label(raw_path), column=m['Final Column'],
-                      details=f"No raw source found. Candidates: {m['Candidate Raw Columns']}")
+    record_mapping_issues(audit, dataset, mapping_rows, raw_path)
     # Stock Expected is frequently an Excel formula. If that formula is copied into a
     # newly written workbook, openpyxl cannot carry Excel's cached result and downstream
     # data_only readers see a blank. Read the source workbook a second time with
@@ -1469,10 +1549,11 @@ def process_stock(raw_path: Path, out_name='Stock file.xlsx', audit=None):
     records = []
     raw_rows = 0
     nondata_rows_removed = 0
+    expected_invalid_rows = 0
     for source_row, row in rows_as_dicts(raw_path):
         raw_rows += 1
-        rec, _ = map_row(row, dataset, headers)
-        cached_rec, _ = map_row(cached_rows.get(source_row, {}), dataset, headers)
+        rec, _ = map_row(row, dataset, headers, source_map)
+        cached_rec, _ = map_row(cached_rows.get(source_row, {}), dataset, headers, source_map)
         rec['Serial No'] = serial_normalize(rec.get('Serial No'))
         # Some Stock exports append a footer/count row with only Serial No populated.
         # Treat that as non-data rather than a stone record.
@@ -1509,6 +1590,13 @@ def process_stock(raw_path: Path, out_name='Stock file.xlsx', audit=None):
                           details='The Excel formula had no cached result, so Expected was recalculated from GRap/GPer using the current Stock business formula.')
             except Exception:
                 pass
+        if (not isinstance(rec.get('Expected'), (int, float)) or isinstance(rec.get('Expected'), bool)
+                or not math.isfinite(float(rec['Expected']))):
+            expected_invalid_rows += 1
+            if expected_invalid_rows <= 25:
+                add_issue(audit, dataset, 'ERROR', 'Expected cannot be calculated safely', source_label(raw_path), source_row,
+                          key=f"Serial No={rec.get('Serial No')}", column='Expected',
+                          details='Provide numeric Expected, or both numeric GRap and GPer. Stock is not marked PASS when Expected is unavailable.')
         enrich_stock_derived(rec)
         rec['_source_row'] = source_row
         records.append(rec)
@@ -1528,7 +1616,8 @@ def process_stock(raw_path: Path, out_name='Stock file.xlsx', audit=None):
                   details=f'{dups} repeated Serial No occurrence(s) found. No deduplication is applied.')
     write_stock_output(out_name, headers, records)
     audit_blanks(audit, dataset, headers, records)
-    status = 'PASS' if all(m['Status'] != 'MISSING' or m['Final Column'] in DERIVED_COLUMNS for m in mapping_rows) else 'FAILED'
+    status = ('PASS' if expected_invalid_rows == 0 and not missing_mapping_rows(mapping_rows)
+              else 'FAILED')
     summary = {
         'Dataset': dataset, 'Output File': out_name, 'Raw File': source_label(raw_path),
         'Previous Final File': '', 'Source Rule': 'RAW Stock only; no previous Stock file required; formula-backed Expected values are materialized from source cached values; no history merge.',
@@ -1537,7 +1626,8 @@ def process_stock(raw_path: Path, out_name='Stock file.xlsx', audit=None):
         'Raw Rows Read': raw_rows, 'Raw Valid Dates': '', 'Raw Invalid Dates': 0, 'Raw New Rows Appended': 'All valid raw rows are source',
         'Raw Historical/Overlap Rows Skipped': 0, 'Blacklist Removed From Raw': 0, 'Stock Non-Data Rows Removed': nondata_rows_removed,
         'Before Cutoff': 0, 'After Anchor': 0,
-        'Output Rows': len(records), 'Exact Duplicate Rows Removed': exact_duplicates_removed, 'Potential Duplicates Kept': dups, 'Status': status
+        'Output Rows': len(records), 'Exact Duplicate Rows Removed': exact_duplicates_removed, 'Potential Duplicates Kept': dups,
+        'Stock Expected Invalid Rows': expected_invalid_rows, 'Status': status
     }
     audit['summary'].append(summary)
     return summary, status == 'PASS'
@@ -1643,11 +1733,12 @@ def main():
             'Legacy Date Column': 'Obsolete final helper column Date is ignored/removed; it is not required from RAW and is not used for date-window logic',
             'Cart/Offer/Wishlist': 'Previous final preserved before its last calendar date; if RAW contains that date, replace the entire boundary date from RAW; otherwise append after latest timestamp; 90-day window; exact full-row duplicates removed',
             'View': 'Previous final preserved before the latest APPOINTMENT_DATE; boundary appointment date refreshed from RAW; comma/semicolon-separated STONE_ID values are split to individual SERIAL_NO rows; blank/0 removed; 90-day window uses APPOINTMENT_DATE; exact full-row duplicates removed',
-            'Hold': 'Same whole-boundary-date refresh rule; SERIAL_NO comes from RAW SERIAL_NO; 90-day window from processing date; exact full-row duplicates removed',
+            'Hold': 'Same whole-boundary-date refresh rule; SERIAL_NO comes from RAW SERIAL_NO; 90-day window from processing date; exact full-row duplicates removed; PARTY_CODE is optional and never blocks Auto Pricing',
             'Sales': "Sales 120/180 previous files carry descriptive history before the boundary date. When current RAW contains the previous file's latest Sale Date, that whole date is replaced from RAW and later RAW dates append; otherwise only rows newer than the latest previous timestamp append. Blank Lab/Flo become NON.",
             'Stock': 'RAW Stock only; no previous Stock file required; canonical output headers are built into the processor; formula-backed Expected is materialized as a numeric value from the source cache (with a GRap/GPer fallback); exact full-row duplicates are removed',
             'Duplicate Cleaning': 'Only fully identical output rows are removed after merge/window processing. Similar or repeated activity with any differing field is retained.',
             'Derived Fields': 'Sales Carat_Grp/Amt and Stock Carat_Grp/Tag are computed in Python and written as values; blank Lab/Flo become NON (including blank Stock Lab -> NON); downstream logic does not depend on Excel cached formulas.',
+            'Missing Optional Columns': 'Missing descriptive fields not used for pricing/record matching/window selection are reported as WARNING and blank in newly imported records. Critical fields still block.',
         },
         'summary': audit['summary'], 'issue_counts': dict(Counter(x['Severity'] for x in audit['issues'])),
         'all_datasets_ok': all(ok_flags), 'audit_file': audit_path.name

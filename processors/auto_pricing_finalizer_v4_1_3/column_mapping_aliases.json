@@ -1,18 +1,192 @@
 {
   "Sales": {
-    "Serial No": ["Stone Number", "Stone Num", "Stone #", "Packet Number", "Lot Number"],
-    "Shp": ["Shape Desc", "Shape Description"],
-    "Carat": ["Carat Weight", "Stone Weight"],
-    "Col": ["Color Grade", "Colour Grade"],
-    "Qua": ["Clarity Grade", "Quality Grade"],
-    "Cut": ["Cut Grade"],
-    "Pol": ["Polish Grade"],
-    "Sym": ["Symmetry Grade"],
-    "Lab": ["Lab Name", "Certificate Lab"],
-    "Flo": ["Fluorescence Grade", "Fluorescence Intensity"],
-    "Sold Party": ["Buyer Name", "Client Name", "Sold Customer"],
-    "Sale Date": ["Sold On", "Sale Dt", "Sales Dt", "Transaction Dt", "Invoice Dt"],
-    "SPer": ["Sale Discount", "Sale Discount %", "Discount Percent"],
-    "SRate": ["Sale Price Rate", "Selling Rate", "Net Rate"]
+    "Serial No": [
+      "Stone Number",
+      "Stone Num",
+      "Stone #",
+      "Packet Number",
+      "Lot Number"
+    ],
+    "Shp": [
+      "Shape Desc",
+      "Shape Description"
+    ],
+    "Carat": [
+      "Carat Weight",
+      "Stone Weight"
+    ],
+    "Col": [
+      "Color Grade",
+      "Colour Grade"
+    ],
+    "Qua": [
+      "Clarity Grade",
+      "Quality Grade"
+    ],
+    "Cut": [
+      "Cut Grade"
+    ],
+    "Pol": [
+      "Polish Grade"
+    ],
+    "Sym": [
+      "Symmetry Grade"
+    ],
+    "Lab": [
+      "Lab Name",
+      "Certificate Lab"
+    ],
+    "Flo": [
+      "Fluorescence Grade",
+      "Fluorescence Intensity"
+    ],
+    "Sold Party": [
+      "Buyer Name",
+      "Client Name",
+      "Sold Customer"
+    ],
+    "Sale Date": [
+      "Sold On",
+      "Sale Dt",
+      "Sales Dt",
+      "Transaction Dt",
+      "Invoice Dt"
+    ],
+    "SPer": [
+      "Sale Discount",
+      "Sale Discount %",
+      "Discount Percent"
+    ],
+    "SRate": [
+      "Sale Price Rate",
+      "Selling Rate",
+      "Net Rate"
+    ]
+  },
+  "Cart": {
+    "CREATED_DATETIME": [
+      "Created Datetime",
+      "Created Date Time",
+      "Created Date",
+      "Created On"
+    ],
+    "Col": [
+      "Color",
+      "Colour",
+      "Color Name"
+    ],
+    "Qua": [
+      "Quality",
+      "Clarity",
+      "Clarity Name"
+    ],
+    "TBINC_NAME": [
+      "TBInc",
+      "TBInc Name"
+    ],
+    "TOIN_NAME": [
+      "TOIn",
+      "TOIn Name"
+    ],
+    "SBINC_NAME": [
+      "SBInc",
+      "SBInc Name"
+    ],
+    "SOIN_NAME": [
+      "SOIn",
+      "SOIn Name"
+    ],
+    "GIRDLE_OPEN_NAME": [
+      "Girdle Open",
+      "Girdle Open Name"
+    ],
+    "PAV_OPEN_NAME": [
+      "Pav Open",
+      "Pav Open Name"
+    ]
+  },
+  "Offer": {
+    "CREATED_DATETIME": [
+      "Created Datetime",
+      "Created Date Time",
+      "Created Date",
+      "Created On"
+    ],
+    "Col": [
+      "Color",
+      "Colour",
+      "Color Name"
+    ],
+    "Qua": [
+      "Quality",
+      "Clarity",
+      "Clarity Name"
+    ],
+    "TBINC_NAME": [
+      "TBInc",
+      "TBInc Name"
+    ],
+    "TOIN_NAME": [
+      "TOIn",
+      "TOIn Name"
+    ],
+    "SBINC_NAME": [
+      "SBInc",
+      "SBInc Name"
+    ],
+    "SOIN_NAME": [
+      "SOIn",
+      "SOIn Name"
+    ],
+    "GIRDLE_OPEN_NAME": [
+      "Girdle Open",
+      "Girdle Open Name"
+    ],
+    "PAV_OPEN_NAME": [
+      "Pav Open",
+      "Pav Open Name"
+    ]
+  },
+  "Wishlist": {
+    "CREATED_DATETIME": [
+      "Created Datetime",
+      "Created Date Time",
+      "Created Date",
+      "Created On"
+    ],
+    "Col": [
+      "Color",
+      "Colour",
+      "Color Name"
+    ],
+    "Qua": [
+      "Quality",
+      "Clarity",
+      "Clarity Name"
+    ],
+    "TBINC_NAME": [
+      "TBInc",
+      "TBInc Name"
+    ],
+    "TOIN_NAME": [
+      "TOIn",
+      "TOIn Name"
+    ],
+    "SBINC_NAME": [
+      "SBInc",
+      "SBInc Name"
+    ],
+    "SOIN_NAME": [
+      "SOIn",
+      "SOIn Name"
+    ],
+    "GIRDLE_OPEN_NAME": [
+      "Girdle Open",
+      "Girdle Open Name"
+    ],
+    "PAV_OPEN_NAME": [
+      "Pav Open",
+      "Pav Open Name"
+    ]
   }
 }

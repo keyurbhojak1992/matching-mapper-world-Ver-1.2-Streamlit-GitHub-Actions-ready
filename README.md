@@ -145,3 +145,7 @@ Auto Pricing uses individual Excel uploads. Stock and Sales current files plus t
 
 ### Auto Pricing Stock history note
 In Full Pipeline mode, **no previous Stock file is required**. Stock is rebuilt entirely from the latest Stock RAW snapshot. Previous history is required only for Sales 120/180 and the action datasets (View, Hold, Offer, Wishlist, Cart).
+
+### Auto Pricing header mapping update (2026-10-09; v1.9.9.1)
+
+The Auto Pricing **Create Latest Output** tab now shows a **Check source-to-final column mapping** preview. October 2026 renamed Cart / Offer / Wishlist fields (including `Created Date`, `Color`, `Quality` and inclusion names) are mapped to unchanged canonical output names. Unmapped required columns block processing; `Hold.PARTY_CODE` cannot be inferred from Party Name. Details and additional file requirements are in `UPDATE_COLUMN_MAPPING_2026-10-09.md`.

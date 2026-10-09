@@ -118,6 +118,77 @@ ACTION_HEADERS = {
 }
 
 
+def preview_auto_pricing_column_mapping(
+    raw_files: dict[str, bytes | None],
+    previous_files: dict[str, bytes | None] | None = None,
+    column_overrides: dict | None = None,
+) -> list[dict]:
+    """Preview deterministic mappings without running the finalizer or altering uploads.
+
+    Missing fields remain explicit. Data-type/date checks are performed by the processor
+    during the full run; this preview only validates source header compatibility.
+    """
+    from processors.auto_pricing_finalizer_v4_1_3.process_datasets_v4_1_3 import (
+        STANDARD_SALES_HEADERS, STOCK_FINAL_HEADERS, read_final_headers,
+        schema_mapping, resolve_sales_mapping,
+    )
+    previous_files = previous_files or {}
+    output = []
+    date_targets = {
+        'Cart': 'CREATED_DATETIME', 'Hold': 'JANGAD_DATE',
+        'Offer': 'CREATED_DATETIME', 'View': 'APPOINTMENT_DATE',
+        'Wishlist': 'CREATED_DATETIME', 'Sales': 'Sale Date',
+    }
+    for dataset in ('Stock', 'Sales', 'Cart', 'Hold', 'Offer', 'View', 'Wishlist'):
+        payload = raw_files.get(dataset)
+        if not payload:
+            continue
+        if dataset == 'Stock':
+            targets = STOCK_FINAL_HEADERS
+        elif dataset == 'Sales':
+            targets = STANDARD_SALES_HEADERS
+        elif previous_files.get(dataset):
+            book = load_workbook(io.BytesIO(previous_files[dataset]), read_only=True, data_only=False)
+            try:
+                targets = [str(v).strip() for v in next(book.active.iter_rows(max_row=1, values_only=True))
+                           if v is not None and str(v).strip()
+                           and ''.join(ch for ch in str(v).lower() if ch.isalnum()) != 'date']
+            finally:
+                book.close()
+        else:
+            targets = ACTION_HEADERS[dataset]
+        if dataset == 'Sales':
+            # Sales has its own conservative date profiling when alias matching is insufficient.
+            with tempfile.TemporaryDirectory(prefix='sales_map_preview_') as tmp:
+                path = Path(tmp) / 'SALE_DATA.xlsx'
+                path.write_bytes(payload)
+                _, rows = resolve_sales_mapping(path, targets, overrides=column_overrides)
+        else:
+            book = load_workbook(io.BytesIO(payload), read_only=True, data_only=True)
+            try:
+                raw_header = next(book.active.iter_rows(max_row=1, values_only=True), ())
+                source_headers = [str(v).strip() if v is not None else '' for v in raw_header]
+            finally:
+                book.close()
+            rows = schema_mapping(dataset, targets, source_headers, overrides=column_overrides)
+        for row in rows:
+            target = row['Final Column']
+            status = row['Status']
+            output.append({
+                'Dataset': dataset,
+                'Role': 'Business date (window)' if date_targets.get(dataset) == target else 'Field',
+                'Final column': target,
+                'Source column': row.get('Raw Columns Found') or '—',
+                'Status': status,
+                'Pricing impact': row.get('Pricing Impact', 'REQUIRED' if status == 'MISSING' else 'OPTIONAL'),
+                'Allowed aliases': row.get('Candidate Raw Columns') or '—',
+                'Rule': row.get('Rule', ''),
+                'Suggestion (review only)': row.get('Suggestion', ''),
+                'Method': row.get('Mapping Method', ''),
+            })
+    return output
+
+
 def default_remove_party_path() -> Path:
     return repository_data_path("auto_pricing_remove_parties")
 
@@ -212,6 +283,8 @@ def run_auto_pricing_full_pipeline_from_files(
     previous_base_files: dict[str, bytes | None],
     remove_party_bytes: bytes | None = None,
     test_date: str | None = None,
+    column_overrides: dict | None = None,
+    party_code_master_bytes: bytes | None = None,
 ) -> tuple[bytes, str, str]:
     """Run the full pipeline from individual XLSX uploads used by the Streamlit UI."""
     raw_zip = _named_xlsx_zip(
@@ -236,6 +309,8 @@ def run_auto_pricing_full_pipeline_from_files(
         previous_base_zip_bytes=previous_zip,
         remove_party_bytes=remove_party_bytes,
         test_date=test_date,
+        column_overrides=column_overrides,
+        party_code_master_bytes=party_code_master_bytes,
     )
 
 
@@ -247,6 +322,8 @@ def run_auto_pricing_full_pipeline(
     sales_120_history_bytes: bytes | None = None,
     sales_180_history_bytes: bytes | None = None,
     test_date: str | None = None,
+    column_overrides: dict | None = None,
+    party_code_master_bytes: bytes | None = None,
 ) -> tuple[bytes, str, str]:
     """Prepare the latest files and build the Auto Pricing workbook."""
     if not PROCESSOR.is_file() or not BUILDER.is_file() or not ALIASES.is_file():
@@ -288,6 +365,19 @@ def run_auto_pricing_full_pipeline(
             "COLUMN_MAPPING_FILE": str(ALIASES),
             "REMOVE_PARTY_FILE": str(remove_party_path),
         })
+        # Persisted only inside the isolated run; users can download/re-upload approved rules.
+        if column_overrides:
+            override_path = work / "approved_column_mapping.json"
+            override_path.write_text(json.dumps(column_overrides, indent=2), encoding="utf-8")
+            env["COLUMN_MAPPING_OVERRIDE_FILE"] = str(override_path)
+        else:
+            env.pop("COLUMN_MAPPING_OVERRIDE_FILE", None)
+        if party_code_master_bytes:
+            master_path = work / "party_code_master.xlsx"
+            master_path.write_bytes(party_code_master_bytes)
+            env["PARTY_CODE_MASTER_FILE"] = str(master_path)
+        else:
+            env.pop("PARTY_CODE_MASTER_FILE", None)
         if test_date:
             env["TEST_PROCESSING_DATE"] = test_date
         else:
@@ -349,6 +439,8 @@ def run_auto_pricing_full_pipeline(
             zf.write(base_zip, arcname=base_zip.name)
             zf.write(output_dir / "Processing_Audit.xlsx", arcname="Processing_Check.xlsx")
             zf.write(report_path, arcname="Run_Summary.json")
+            if column_overrides:
+                zf.writestr("approved_column_mapping.json", json.dumps(column_overrides, indent=2))
             for filename in BASE_FILES:
                 path = output_dir / filename
                 if path.is_file():

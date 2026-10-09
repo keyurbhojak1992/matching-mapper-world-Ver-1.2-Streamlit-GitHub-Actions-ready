@@ -15,6 +15,7 @@ from adapters.auto_pricing_adapter import ACTION_NAMES as AUTO_PRICING_ACTION_NA
 from adapters.auto_pricing_pipeline_adapter import (
     AutoPricingDataError,
     default_remove_party_bytes,
+    preview_auto_pricing_column_mapping,
     run_auto_pricing_full_pipeline_from_files,
 )
 from adapters.bid_drop_adapter import run_bid_drop_checking
@@ -1339,6 +1340,116 @@ def auto_pricing_page() -> None:
                     key=f"auto_pricing_full_previous_{dataset.lower()}",
                 )
 
+        st.markdown("##### Dynamic header mapper (optional)")
+        party_code_master = st.file_uploader(
+            "Party-code master (optional, never required for pricing): Party Name and PARTY_CODE",
+            type=["xlsx"], key="auto_pricing_party_master"
+        )
+        uploaded_mappings = st.file_uploader(
+            "Previously approved column mappings (optional JSON)", type=["json"],
+            key="auto_pricing_column_overrides_file"
+        )
+        imported_mappings = {}
+        mapping_import_error = None
+        if uploaded_mappings is not None:
+            try:
+                if len(uploaded_mappings.getvalue()) > 200000:
+                    raise ValueError("Mapping file is too large")
+                imported_mappings = json.loads(uploaded_mappings.getvalue().decode("utf-8"))
+                if not isinstance(imported_mappings, dict) or any(not isinstance(v, dict) for v in imported_mappings.values()):
+                    raise ValueError("Expected JSON structure: {dataset: {final_field: source_header}}")
+            except Exception as exc:
+                mapping_import_error = str(exc)
+                st.error("Could not load approved mappings: " + mapping_import_error)
+        current_mappings = {k: dict(v) for k, v in imported_mappings.items()}
+        session_mappings = st.session_state.setdefault("auto_pricing_approved_mappings", {})
+        for key, fields in session_mappings.items():
+            current_mappings.setdefault(key, {}).update(fields)
+
+        mapping_missing = []
+        if mapping_import_error:
+            mapping_missing.append("Invalid approved-mapping JSON")
+        if any(raw_uploads.values()):
+            with st.expander("Check / approve source-to-final column mapping", expanded=True):
+                st.caption("Approved aliases are matched automatically. Unknown headers are suggestions only until approved. "
+                           "Final field names, required business dates, and 90/120/180-day windows do not change.")
+                try:
+                    raw_bytes = {name: up.getvalue() if up is not None else None for name, up in raw_uploads.items()}
+                    previous_bytes = {name: up.getvalue() if up is not None else None for name, up in previous_uploads.items()}
+                    preview_rows = preview_auto_pricing_column_mapping(
+                        raw_bytes, previous_bytes, column_overrides=current_mappings
+                    )
+                    # Party Code is optional: verified history/master values are used when
+                    # available; missing codes do not affect action counts or pricing.
+                    if (previous_bytes.get('Hold') or party_code_master is not None):
+                        for r in preview_rows:
+                            if r['Dataset'] == 'Hold' and r['Final column'] == 'PARTY_CODE' and r['Status'] == 'OPTIONAL_MISSING':
+                                r['Status'] = 'OPTIONAL_LOOKUP'
+                                r['Method'] = 'VERIFIED_PARTY_LOOKUP'
+                                r['Rule'] = 'Best-effort party-code lookup; unmatched values remain blank and do not block.'
+                    mapping_missing.extend(f"{r['Dataset']}.{r['Final column']} (required pricing/key/date field unmapped)"
+                                           for r in preview_rows if r['Status'] == 'MISSING')
+                    optional_rows = [r for r in preview_rows if r['Status'] in ('OPTIONAL_MISSING', 'OPTIONAL_LOOKUP')]
+                    date_cols = [r for r in preview_rows if r['Role'] == 'Business date (window)']
+                    if date_cols:
+                        st.write("Business dates:", "; ".join(
+                            f"{r['Dataset']}: {r['Source column']} → {r['Final column']}"
+                            for r in date_cols))
+                    if mapping_missing:
+                        st.warning(f"{len(mapping_missing)} required field(s) need a verified mapping before processing.")
+                    else:
+                        st.success("All pricing-required source columns are mapped. Optional missing columns do not block processing.")
+                    if optional_rows:
+                        st.warning(f"{len(optional_rows)} optional field(s) are unavailable. They will remain blank in new output rows unless mapped or verified. Processing can continue.")
+                    st.dataframe(preview_rows, hide_index=True, use_container_width=True)
+
+                    st.markdown("**Approve / correct a column mapping**")
+                    datasets = sorted(set(r['Dataset'] for r in preview_rows))
+                    selected_dataset = st.selectbox("Dataset", datasets, key="auto_pricing_map_dataset")
+                    dataset_rows = [r for r in preview_rows if r['Dataset'] == selected_dataset and (r['Status'] != 'DERIVED' or (selected_dataset == 'Stock' and r['Final column'] == 'Expected'))]
+                    targets = [r['Final column'] for r in dataset_rows]
+                    selected_target = st.selectbox("Final standardized column", targets, key="auto_pricing_map_target")
+                    target_row = next(r for r in dataset_rows if r['Final column'] == selected_target)
+                    from openpyxl import load_workbook as _load_header_workbook
+                    source_book = _load_header_workbook(io.BytesIO(raw_bytes[selected_dataset]), read_only=True, data_only=True)
+                    try:
+                        raw_headers = [str(x).strip() for x in next(source_book.active.iter_rows(max_row=1, values_only=True))
+                                       if x is not None and str(x).strip()]
+                    finally:
+                        source_book.close()
+                    suggested = target_row.get('Suggestion (review only)', '')
+                    current_source = current_mappings.get(selected_dataset, {}).get(selected_target)
+                    proposed = current_source if current_source in raw_headers else suggested if suggested in raw_headers else None
+                    choices = ["— Choose source header —"] + raw_headers
+                    selected_source = st.selectbox(
+                        "Actual source header", choices,
+                        index=choices.index(proposed) if proposed in choices else 0,
+                        key=f"auto_pricing_map_selected_{selected_dataset}_{selected_target}"
+                    )
+                    a,b = st.columns(2)
+                    with a:
+                        if st.button("Approve this mapping", key="auto_pricing_map_approve",
+                                     disabled=selected_source == choices[0]):
+                            session_mappings.setdefault(selected_dataset, {})[selected_target] = selected_source
+                            st.rerun()
+                    with b:
+                        if st.button("Clear manual override", key="auto_pricing_map_clear"):
+                            session_mappings.setdefault(selected_dataset, {}).pop(selected_target, None)
+                            st.rerun()
+                    if current_mappings:
+                        st.download_button(
+                            "Download approved mappings (reusable JSON)",
+                            json.dumps(current_mappings, indent=2).encode("utf-8"),
+                            file_name="approved_column_mappings.json", mime="application/json",
+                            key="auto_pricing_map_download"
+                        )
+                    if any(r['Dataset']=='Hold' and r['Status']=='OPTIONAL_LOOKUP' for r in preview_rows):
+                        st.info("Hold PARTY_CODE is not used in pricing. The app reuses verified codes when possible "
+                                "and leaves unknown codes blank; uploading a party master is optional.")
+                except Exception as exc:
+                    mapping_missing = ["Column preflight could not safely verify the selected workbook(s)"]
+                    st.error(f"Could not check mapping: {_friendly_message(exc)}")
+
         default_remove_bytes = default_remove_party_bytes()
 
         with st.expander("Use a different processing date (optional)", expanded=False):
@@ -1416,6 +1527,7 @@ def auto_pricing_page() -> None:
             missing.append("Previous 120-day Sales file")
         if default_remove_bytes is None:
             missing.append("Removed parties list")
+        missing.extend(mapping_missing)
 
         if st.button(
             "Create Auto Pricing",
@@ -1439,6 +1551,8 @@ def auto_pricing_page() -> None:
                         },
                         remove_party_bytes=None,
                         test_date=test_date or None,
+                        column_overrides=current_mappings,
+                        party_code_master_bytes=party_code_master.getvalue() if party_code_master else None,
                     )
                     _save_result("auto_pricing_full_result", data, filename, logs)
                 st.rerun()
@@ -1468,7 +1582,7 @@ def auto_pricing_page() -> None:
                 _show_user_error("Unable to complete Auto Pricing", exc)
 
         if missing:
-            st.info("Add these required files before continuing: " + "; ".join(missing))
+            st.info("Resolve these required files or unmapped columns before continuing: " + "; ".join(missing))
 
         result = st.session_state.get("auto_pricing_full_result")
         if result:
