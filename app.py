@@ -2061,6 +2061,33 @@ def advanced_demand_filter_page() -> None:
             "Large Filters.xlsx files are streamed in 5,000-rule batches. Intermediate matches are kept on temporary disk, and stock-side indexes narrow INCLUDE rules before the source matching logic runs."
         )
 
+    # A separate output-only configuration leaves all existing matching controls
+    # and original master-code overrides unchanged. The popover is a button.
+    with st.popover("⚙️ Make Config", use_container_width=False):
+        st.markdown("**Advanced Demand output options**")
+        min_stones_per_party = st.number_input(
+            "Minimum stones per party (0 = off)",
+            min_value=0,
+            max_value=1000000,
+            value=0,
+            step=1,
+            key="advanced_demand_min_stones_per_party",
+            help="Remove a party only if its final unique stone count is less than this number. Navigation is rebuilt with retained parties only. The limit is applied after No Need and Match Status filters.",
+        )
+        layout_labels = {
+            "Salesperson workbooks (current format)": "salesperson_workbooks",
+            "Separate party files (one ZIP per salesperson)": "separate_party_files",
+            "Both formats in one ZIP": "both",
+        }
+        selected_layout = st.radio(
+            "Download ZIP layout",
+            options=list(layout_labels),
+            index=0,
+            key="advanced_demand_output_layout",
+            help="Current format: one Excel per salesperson with Navigation. Separate: final ZIP includes one ZIP per salesperson holding an Excel for every retained party. Both: include the salesperson Excel and the per-party ZIP side by side.",
+        )
+        st.caption("Example with minimum 10: parties with 1–9 stones are removed; parties with 10 or more stay. Salespeople with no retained parties are omitted.")
+
     specific_parties = parse_delimited_values(specific_parties_text) or ["NONE"]
 
     if st.button(
@@ -2076,6 +2103,8 @@ def advanced_demand_filter_page() -> None:
                     stock_bytes=stock.getvalue(),
                     filter_bytes=filters.getvalue(),
                     clean_bytes=clean_file.getvalue() if clean_file is not None else None,
+                    min_stones_per_party=int(min_stones_per_party),
+                    output_layout=layout_labels[selected_layout],
                     runtime_overrides={
                         "TOLERANCE_LEVEL": int(tolerance),
                         "ENABLE_FANCY_COLOR_TOLERANCE": bool(fancy_color_tolerance),

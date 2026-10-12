@@ -22,6 +22,8 @@ def run_advanced_demand_filter(
     filter_bytes: bytes,
     clean_bytes: bytes | None = None,
     runtime_overrides: dict[str, object] | None = None,
+    min_stones_per_party: int = 0,
+    output_layout: str = "salesperson_workbooks",
 ) -> tuple[bytes, str, str]:
     """Run the isolated Advanced Demand Filter workflow.
 
@@ -56,6 +58,8 @@ def run_advanced_demand_filter(
                 str(filter_path),
                 int(getattr(module, "TOLERANCE_LEVEL", 1)),
                 str(clean_path) if clean_path is not None else None,
+                min_stones_per_party=min_stones_per_party,
+                output_layout=output_layout,
             )
 
         if not output_path.exists():

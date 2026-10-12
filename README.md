@@ -2,6 +2,8 @@
 
 A private Streamlit interface for diamond matching, demand mapping, suggested-stock generation, output prioritization, BID drop diagnostics, and workbook distribution.
 
+**Advanced Demand Filter (v1.9.9.5):** click **Make Config** to set a minimum final stone count per party and choose the output ZIP layout (regular salesperson workbooks, per-salesperson ZIPs of separate party Excel files, or both). See [ADVANCED_DEMAND_MAKE_CONFIG_UPDATE.md](ADVANCED_DEMAND_MAKE_CONFIG_UPDATE.md).
+
 ## Recommended deployment
 
 ```text
