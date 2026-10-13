@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from contextlib import nullcontext
 import os
 import re
 import sqlite3
@@ -303,6 +304,46 @@ def _order_output_columns(module, df):
     return df[ordered_cols]
 
 
+# Report-only controls. They are deliberately separate from the preserved
+# Advance_Demand_Filter_Process matching engine and its runtime overrides.
+REPORT_LAYOUT_SALESPERSON = "salesperson_workbooks"
+REPORT_LAYOUT_SEPARATE = "separate_party_files"
+REPORT_LAYOUT_BOTH = "both"
+REPORT_LAYOUTS = frozenset({
+    REPORT_LAYOUT_SALESPERSON, REPORT_LAYOUT_SEPARATE, REPORT_LAYOUT_BOTH,
+})
+
+
+def _add_styled_party_sheet(module, workbook, sheet_name, df_output):
+    """Use the same sheet creation/styling path for all report layouts."""
+    ws_out = workbook.create_sheet(title=sheet_name)
+    ws_out.append(df_output.columns.tolist())
+    for row in df_output.itertuples(index=False, name=None):
+        ws_out.append(row)
+    module.format_native_hyperlinks(ws_out, df_output)
+    module.apply_styles_to_worksheet(ws_out, df_output)
+    module.auto_adjust_column_widths(ws_out, dataframe=df_output)
+    for hidden_col in ["Match_Type", "Is_Filter_Match"]:
+        output_headers = [cell.value for cell in ws_out[1]]
+        if hidden_col in output_headers:
+            ws_out.delete_cols(output_headers.index(hidden_col) + 1)
+    return ws_out
+
+
+def _unique_party_filename(party_name, used_names):
+    """Avoid unsafe filenames and collisions in a salesperson's nested ZIP."""
+    name = re.sub(r'[\\/*?:"<>|\x00-\x1f]', "_", str(party_name)).strip(" .")[:110]
+    name = name or "Party"
+    current = f"{name}.xlsx"
+    counter = 1
+    while current.casefold() in used_names:
+        suffix = f"_{counter}"
+        current = f"{name[:110 - len(suffix)]}{suffix}.xlsx"
+        counter += 1
+    used_names.add(current.casefold())
+    return current
+
+
 def generate_salesperson_reports_batched(
     module,
     file_path_stock,
@@ -311,7 +352,17 @@ def generate_salesperson_reports_batched(
     tolerance_level,
     clean_file_path=None,
     rule_batch_size=FILTER_RULE_BATCH_SIZE,
+    min_stones_per_party=0,
+    output_layout=REPORT_LAYOUT_SALESPERSON,
 ):
+    # Zero disables the optional minimum. Exactly N stones always qualifies.
+    if isinstance(min_stones_per_party, bool) or not isinstance(min_stones_per_party, int) or min_stones_per_party < 0:
+        raise ValueError("Minimum stones per party must be a non-negative integer.")
+    if output_layout not in REPORT_LAYOUTS:
+        raise ValueError(f"Unknown Advanced Demand output layout: {output_layout!r}")
+    include_workbooks = output_layout in {REPORT_LAYOUT_SALESPERSON, REPORT_LAYOUT_BOTH}
+    include_separate = output_layout in {REPORT_LAYOUT_SEPARATE, REPORT_LAYOUT_BOTH}
+
     if not filter_file_path or not os.path.exists(filter_file_path):
         raise FileNotFoundError("Filters workbook is required.")
     if not file_path_stock or not os.path.exists(file_path_stock):
@@ -532,14 +583,20 @@ def generate_salesperson_reports_batched(
         global_exclusion_by_sp, specific_exclusion_by_sp_party = module.build_exclusion_rule_index(exclusion_data)
 
         reports_created = 0
-        print("Building salesperson report workbooks...")
+        separated_party_files = 0
+        below_minimum_parties = 0
+        used_salesperson_filenames = set()
+        print(f"Building salesperson report ZIP (layout: {output_layout})...")
+        if min_stones_per_party:
+            print(f"Minimum stones per party: {min_stones_per_party} (checked after output filters)")
         with zipfile.ZipFile(output_zip_path, "w", zipfile.ZIP_STORED) as zipf:
             salesperson_rows = conn.execute(
                 "SELECT salesperson FROM salesperson_meta ORDER BY first_seq"
             ).fetchall()
             for (salesperson,) in salesperson_rows:
-                workbook = Workbook()
-                workbook.remove(workbook.active)
+                workbook = Workbook() if include_workbooks else None
+                if workbook is not None:
+                    workbook.remove(workbook.active)
                 sheets_for_nav = []
                 global_exclusion_rules = global_exclusion_by_sp.get(salesperson, pd.DataFrame())
                 party_rows = conn.execute(
@@ -547,118 +604,153 @@ def generate_salesperson_reports_batched(
                     " WHERE salesperson = ? ORDER BY first_seq",
                     (salesperson,),
                 ).fetchall()
-                used_sheet_names = set()
-
-                for norm_party, party_display_name, country, city in party_rows:
-                    matched_rows = conn.execute(
-                        "SELECT stock_idx, match_rank, tag_no FROM matches"
-                        " WHERE salesperson = ? AND norm_party = ?",
-                        (salesperson, norm_party),
-                    ).fetchall()
-                    if not matched_rows:
-                        continue
-
-                    stock_labels = [int(row[0]) for row in matched_rows]
-                    rank_by_label = {int(row[0]): int(row[1]) for row in matched_rows}
-                    tag_by_label = {int(row[0]): row[2] for row in matched_rows}
-                    result = stocks_df.loc[stock_labels].copy()
-                    reverse_rank = {0: "Exact", 1: "Nearby", 2: "Maybe"}
-                    result["Match_Type"] = [
-                        reverse_rank.get(rank_by_label.get(int(index), 2), "Maybe")
-                        for index in result.index
-                    ]
-                    result["Is_Filter_Match"] = True
-                    if module.ENABLE_RELATED_TAG:
-                        result["Tag_No"] = [tag_by_label.get(int(index), "") for index in result.index]
-
-                    result["Match_Type"] = pd.Categorical(
-                        result["Match_Type"], categories=["Exact", "Nearby", "Maybe"], ordered=True
-                    )
-                    result.sort_values(
-                        by=["Match_Type", "Shp", "Carat", "Color", "Qua"], inplace=True
-                    )
-                    result.drop_duplicates(subset=["Serial No"], keep="first", inplace=True)
-                    result.reset_index(drop=True, inplace=True)
-
-                    if module.ENABLE_CLEAN_FILE and not result.empty:
-                        specific_rules = specific_exclusion_by_sp_party.get(
-                            (salesperson, norm_party), pd.DataFrame()
-                        )
-                        if not global_exclusion_rules.empty and not specific_rules.empty:
-                            combined_no_need_rules = pd.concat(
-                                [global_exclusion_rules, specific_rules], ignore_index=True
-                            )
-                        elif not global_exclusion_rules.empty:
-                            combined_no_need_rules = global_exclusion_rules
-                        else:
-                            combined_no_need_rules = specific_rules
-                        if not combined_no_need_rules.empty:
-                            result = module.apply_exclusion_rules(result, combined_no_need_rules)
-                        result.reset_index(drop=True, inplace=True)
-
-                    result = module.apply_match_status_output_filter(result, party_display_name)
-                    result.reset_index(drop=True, inplace=True)
-                    if result.empty:
-                        continue
-
-                    if "Sr.No" in result.columns:
-                        result.drop(columns=["Sr.No"], inplace=True)
-                    result.insert(0, "Sr.No", range(1, 1 + len(result)))
-                    result = _order_output_columns(module, result)
-
-                    valid_sheet_name = re.sub(r'[\\/*?:"<>|]', "_", str(party_display_name))[:31].strip() or "PartySheet"
-                    original_name = valid_sheet_name
-                    counter = 1
-                    while valid_sheet_name in used_sheet_names:
-                        valid_sheet_name = f"{original_name[:28]}_{counter}"
-                        counter += 1
-                    used_sheet_names.add(valid_sheet_name)
-
-                    ws_out = workbook.create_sheet(title=valid_sheet_name)
-                    df_output = result.copy()
-                    ws_out.append(df_output.columns.tolist())
-                    for row in df_output.itertuples(index=False, name=None):
-                        ws_out.append(row)
-                    module.format_native_hyperlinks(ws_out, df_output)
-                    module.apply_styles_to_worksheet(ws_out, df_output)
-                    module.auto_adjust_column_widths(ws_out, dataframe=df_output)
-                    for hidden_col in ["Match_Type", "Is_Filter_Match"]:
-                        output_headers = [cell.value for cell in ws_out[1]]
-                        if hidden_col in output_headers:
-                            ws_out.delete_cols(output_headers.index(hidden_col) + 1)
-                    sheets_for_nav.append(
-                        (valid_sheet_name, party_display_name, len(df_output), country, city)
-                    )
-
-                if not sheets_for_nav:
-                    workbook.close()
-                    continue
-
-                nav_ws = workbook.create_sheet(title="Navigation", index=0)
-                nav_headers = ["Go To Sheet", "Party Name", "Count", "Country", "City", "Go \u2192"]
-                for col_num, header_name in enumerate(nav_headers, start=1):
-                    nav_ws.cell(row=1, column=col_num, value=header_name)
-                for row_num, (sheet_name, party_name, count, country, city) in enumerate(sheets_for_nav, start=2):
-                    nav_ws.cell(row=row_num, column=1, value=sheet_name)
-                    nav_ws.cell(row=row_num, column=2, value=party_name)
-                    nav_ws.cell(row=row_num, column=3, value=count)
-                    nav_ws.cell(row=row_num, column=4, value=country)
-                    nav_ws.cell(row=row_num, column=5, value=city)
-                    nav_ws.cell(row=row_num, column=6, value="Go \u2192").hyperlink = f"#'{sheet_name}'!A1"
-                module.apply_styles_to_worksheet(nav_ws)
-                module.auto_adjust_column_widths(nav_ws)
-
+                # Navigation must not collide with any party sheet.
+                used_sheet_names = {"navigation"}
+                used_party_filenames = set()
                 clean_sp = "".join(
                     char for char in str(salesperson) if char.isalnum() or char in (" ", "_")
                 ).strip()[:50] or "Report"
-                temp_xlsx = os.path.join(temp_dir, f"{clean_sp}.xlsx")
-                workbook.save(temp_xlsx)
-                workbook.close()
-                zipf.write(temp_xlsx, arcname=f"{clean_sp}.xlsx")
-                try:
+                unique_sp = clean_sp
+                suffix = 1
+                while unique_sp.casefold() in used_salesperson_filenames:
+                    extra = f"_{suffix}"
+                    unique_sp = f"{clean_sp[:50 - len(extra)]}{extra}"
+                    suffix += 1
+                used_salesperson_filenames.add(unique_sp.casefold())
+                nested_zip_path = os.path.join(temp_dir, f"{unique_sp}_parties.zip")
+
+                # Each salesperson gets a nested ZIP only when that layout is enabled.
+                nested_context = (
+                    zipfile.ZipFile(nested_zip_path, "w", zipfile.ZIP_DEFLATED)
+                    if include_separate else nullcontext(None)
+                )
+                with nested_context as party_zip:
+                    for norm_party, party_display_name, country, city in party_rows:
+                        matched_rows = conn.execute(
+                            "SELECT stock_idx, match_rank, tag_no FROM matches"
+                            " WHERE salesperson = ? AND norm_party = ?",
+                            (salesperson, norm_party),
+                        ).fetchall()
+                        if not matched_rows:
+                            continue
+
+                        stock_labels = [int(row[0]) for row in matched_rows]
+                        rank_by_label = {int(row[0]): int(row[1]) for row in matched_rows}
+                        tag_by_label = {int(row[0]): row[2] for row in matched_rows}
+                        result = stocks_df.loc[stock_labels].copy()
+                        reverse_rank = {0: "Exact", 1: "Nearby", 2: "Maybe"}
+                        result["Match_Type"] = [
+                            reverse_rank.get(rank_by_label.get(int(index), 2), "Maybe")
+                            for index in result.index
+                        ]
+                        result["Is_Filter_Match"] = True
+                        if module.ENABLE_RELATED_TAG:
+                            result["Tag_No"] = [tag_by_label.get(int(index), "") for index in result.index]
+
+                        result["Match_Type"] = pd.Categorical(
+                            result["Match_Type"], categories=["Exact", "Nearby", "Maybe"], ordered=True
+                        )
+                        result.sort_values(
+                            by=["Match_Type", "Shp", "Carat", "Color", "Qua"], inplace=True
+                        )
+                        result.drop_duplicates(subset=["Serial No"], keep="first", inplace=True)
+                        result.reset_index(drop=True, inplace=True)
+
+                        if module.ENABLE_CLEAN_FILE and not result.empty:
+                            specific_rules = specific_exclusion_by_sp_party.get(
+                                (salesperson, norm_party), pd.DataFrame()
+                            )
+                            if not global_exclusion_rules.empty and not specific_rules.empty:
+                                combined_no_need_rules = pd.concat(
+                                    [global_exclusion_rules, specific_rules], ignore_index=True
+                                )
+                            elif not global_exclusion_rules.empty:
+                                combined_no_need_rules = global_exclusion_rules
+                            else:
+                                combined_no_need_rules = specific_rules
+                            if not combined_no_need_rules.empty:
+                                result = module.apply_exclusion_rules(result, combined_no_need_rules)
+                            result.reset_index(drop=True, inplace=True)
+
+                        result = module.apply_match_status_output_filter(result, party_display_name)
+                        result.reset_index(drop=True, inplace=True)
+                        if result.empty:
+                            continue
+                        # Apply the limit to the final unique stone rows, not rule count
+                        # or the raw pre-exclusion matches; it is per salesperson/party.
+                        if len(result) < min_stones_per_party:
+                            below_minimum_parties += 1
+                            continue
+
+                        if "Sr.No" in result.columns:
+                            result.drop(columns=["Sr.No"], inplace=True)
+                        result.insert(0, "Sr.No", range(1, 1 + len(result)))
+                        result = _order_output_columns(module, result)
+
+                        valid_sheet_name = re.sub(r'[\\/*?:"<>|]', "_", str(party_display_name))[:31].strip() or "PartySheet"
+                        original_name = valid_sheet_name
+                        counter = 1
+                        while valid_sheet_name.casefold() in used_sheet_names:
+                            extra = f"_{counter}"
+                            valid_sheet_name = f"{original_name[:31 - len(extra)]}{extra}"
+                            counter += 1
+                        used_sheet_names.add(valid_sheet_name.casefold())
+
+                        if workbook is not None:
+                            _add_styled_party_sheet(module, workbook, valid_sheet_name, result)
+                        if party_zip is not None:
+                            # Independent Excel files contain only their own party sheet,
+                            # since a Navigation link to absent sheets would be invalid.
+                            single_book = Workbook()
+                            single_book.remove(single_book.active)
+                            _add_styled_party_sheet(module, single_book, valid_sheet_name, result)
+                            temp_xlsx = os.path.join(temp_dir, f"advanced_separate_{unique_sp}.xlsx")
+                            try:
+                                single_book.save(temp_xlsx)
+                            finally:
+                                single_book.close()
+                            party_zip.write(
+                                temp_xlsx,
+                                arcname=_unique_party_filename(party_display_name, used_party_filenames),
+                            )
+                            os.remove(temp_xlsx)
+                            separated_party_files += 1
+                        sheets_for_nav.append(
+                            (valid_sheet_name, party_display_name, len(result), country, city)
+                        )
+
+                if not sheets_for_nav:
+                    if workbook is not None:
+                        workbook.close()
+                    if include_separate:
+                        os.remove(nested_zip_path)
+                    continue
+
+                if workbook is not None:
+                    nav_ws = workbook.create_sheet(title="Navigation", index=0)
+                    nav_headers = ["Go To Sheet", "Party Name", "Count", "Country", "City", "Go \u2192"]
+                    for col_num, header_name in enumerate(nav_headers, start=1):
+                        nav_ws.cell(row=1, column=col_num, value=header_name)
+                    for row_num, (sheet_name, party_name, count, country, city) in enumerate(sheets_for_nav, start=2):
+                        nav_ws.cell(row=row_num, column=1, value=sheet_name)
+                        nav_ws.cell(row=row_num, column=2, value=party_name)
+                        nav_ws.cell(row=row_num, column=3, value=count)
+                        nav_ws.cell(row=row_num, column=4, value=country)
+                        nav_ws.cell(row=row_num, column=5, value=city)
+                        escaped_name = sheet_name.replace("'", "''")
+                        nav_ws.cell(row=row_num, column=6, value="Go \u2192").hyperlink = f"#'{escaped_name}'!A1"
+                    module.apply_styles_to_worksheet(nav_ws)
+                    module.auto_adjust_column_widths(nav_ws)
+                    temp_xlsx = os.path.join(temp_dir, f"{unique_sp}.xlsx")
+                    try:
+                        workbook.save(temp_xlsx)
+                    finally:
+                        workbook.close()
+                    zipf.write(temp_xlsx, arcname=f"{unique_sp}.xlsx")
                     os.remove(temp_xlsx)
-                except OSError:
-                    pass
+                if include_separate:
+                    zipf.write(nested_zip_path, arcname=f"{unique_sp}.zip")
+                    os.remove(nested_zip_path)
                 reports_created += 1
 
         conn.close()
@@ -671,4 +763,8 @@ def generate_salesperson_reports_batched(
     print(f"Blank filter rows skipped: {blank_filter_rows:,}")
     print(f"Rules that produced matches: {matched_filter_rows:,}")
     print(f"Matched stock links before party dedupe: {matched_stock_links:,}")
-    print(f"Salesperson reports created: {reports_created:,}")
+    print(f"Salesperson groups created: {reports_created:,}")
+    print(f"Party sheets removed below minimum: {below_minimum_parties:,}")
+    print(f"Separated party Excel files created: {separated_party_files:,}")
+    if reports_created == 0:
+        print("No salesperson reports met the selected output requirements; output ZIP is empty.")
