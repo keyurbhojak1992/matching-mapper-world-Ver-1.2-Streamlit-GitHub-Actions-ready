@@ -1989,6 +1989,26 @@ def demand_filter_page() -> None:
 
 
 def advanced_demand_filter_page() -> None:
+    # The job is stored on disk. Keep its unguessable resume token in the URL as
+    # well as Streamlit session_state, because Streamlit uploads/session state may
+    # disappear on a browser reconnect. A recovered job starts PAUSED to avoid
+    # launching duplicate workers from multiple browser tabs.
+    recovered_token = str(st.query_params.get("advanced_demand_job", "")).strip()
+    if recovered_token and not st.session_state.get("advanced_demand_batch_job_id"):
+        try:
+            batch_job_snapshot(recovered_token)
+        except (ValueError, FileNotFoundError):
+            st.warning("The saved batch job in this URL is unavailable on this server. "
+                       "The server may have restarted or cleared temporary storage. "
+                       "Upload the files again to start a new job.")
+            if st.button("Clear unavailable job link", key="clear_unavailable_adv_job"):
+                del st.query_params["advanced_demand_job"]
+                st.rerun()
+        else:
+            st.session_state["advanced_demand_batch_job_id"] = recovered_token
+            st.session_state["advanced_demand_batch_running"] = False
+            st.info("Saved Advanced Demand job recovered from the URL. "
+                    "Select **Continue batches** below to resume from the last checkpoint.")
     section_header(
         "Large-file rule-based stock demand",
         "Advanced Demand Filter",
@@ -2124,7 +2144,7 @@ def advanced_demand_filter_page() -> None:
         "Generate advanced demand-filter reports",
         type="primary",
         use_container_width=True,
-        disabled=stock is None or filters is None,
+        disabled=stock is None or filters is None or bool(st.session_state.get("advanced_demand_batch_job_id")),
         key="run_advanced_demand_filter",
     ):
         try:
@@ -2148,6 +2168,8 @@ def advanced_demand_filter_page() -> None:
                     },
                 )
                 st.session_state["advanced_demand_batch_job_id"] = job_id
+                # Preserve the job token across browser reconnects and reloads.
+                st.query_params["advanced_demand_job"] = job_id
                 st.session_state["advanced_demand_batch_running"] = True
                 st.rerun()
             with st.spinner("Applying advanced demand rules and generating salesperson workbooks..."):
@@ -2173,8 +2195,9 @@ def advanced_demand_filter_page() -> None:
         except Exception as exc:
             _show_user_error("Unable to complete Advanced Demand Filter", exc)
 
-    if stock is None or filters is None:
-        st.info("Stock Actual and Filters workbooks are required. Optional files can be left blank.")
+    if (stock is None or filters is None) and not st.session_state.get("advanced_demand_batch_job_id"):
+        st.info("Stock Actual and Filters workbooks are required to start a new job. "
+                "For an existing job, open your saved recovery URL or use Resume below.")
 
     with st.expander("Resume an existing batch job (same server)", expanded=False):
         resume_id = st.text_input(
@@ -2185,6 +2208,7 @@ def advanced_demand_filter_page() -> None:
             try:
                 batch_job_snapshot(resume_id.strip())
                 st.session_state["advanced_demand_batch_job_id"] = resume_id.strip()
+                st.query_params["advanced_demand_job"] = resume_id.strip()
                 st.session_state["advanced_demand_batch_running"] = True
                 st.rerun()
             except Exception as exc:
@@ -2192,6 +2216,9 @@ def advanced_demand_filter_page() -> None:
 
     active_job = st.session_state.get("advanced_demand_batch_job_id")
     if active_job:
+        st.caption("Recovery link: this page's URL now includes the batch job ID. "
+                   "Bookmark it or copy it to resume after a browser reconnect. "
+                   "Anyone with the link can access the job, so keep it private.")
         try:
             job_config, job_state = batch_job_snapshot(active_job)
             phase = job_state["phase"]
@@ -2206,7 +2233,8 @@ def advanced_demand_filter_page() -> None:
                 st.info(
                     f"**Matching:** {raw_done:,} of approximately {estimated_rows:,} filter rows checked; "
                     f"{int(job_state.get('processed_filter_rows', 0)):,} unique rules processed. "
-                    f"Batch size: {int(job_config['batch_rows']):,}."
+                    f"Batch size: {int(job_config['batch_rows']):,}. "
+                    "Salesperson reports are created after all filter rows are matched."
                 )
             elif phase in {"reporting", "packaging"}:
                 st.info(
@@ -2219,6 +2247,12 @@ def advanced_demand_filter_page() -> None:
                     f"{int(job_state.get('reports_created', 0)):,} salesperson reports."
                 )
             if phase != "done":
+                if st.button("Stop showing this job / start a new upload", key="advanced_demand_release_job"):
+                    st.session_state.pop("advanced_demand_batch_job_id", None)
+                    st.session_state["advanced_demand_batch_running"] = False
+                    if "advanced_demand_job" in st.query_params:
+                        del st.query_params["advanced_demand_job"]
+                    st.rerun()
                 b1, b2 = st.columns(2)
                 if b1.button("Pause after current batch", key="advanced_demand_pause_batch"):
                     st.session_state["advanced_demand_batch_running"] = False
@@ -2233,6 +2267,12 @@ def advanced_demand_filter_page() -> None:
                 else:
                     st.warning("Paused. Click Continue batches to continue from the saved checkpoint.")
             else:
+                if st.button("Finish this job and start another upload", key="advanced_demand_next_job"):
+                    st.session_state.pop("advanced_demand_batch_job_id", None)
+                    st.session_state["advanced_demand_batch_running"] = False
+                    if "advanced_demand_job" in st.query_params:
+                        del st.query_params["advanced_demand_job"]
+                    st.rerun()
                 path = batch_output_path(active_job)
                 with path.open("rb") as zip_file:
                     st.download_button(

@@ -16,6 +16,11 @@ import gc
 import tempfile
 
 try:
+    import resource
+except ImportError:  # pragma: no cover - Windows
+    resource = None
+
+try:
     import fcntl  # POSIX Streamlit hosts; locks are released on worker termination.
 except ImportError:  # pragma: no cover - Windows local development
     fcntl = None
@@ -96,17 +101,42 @@ def batch_job_snapshot(job_id: str) -> tuple[dict, dict]:
     return meta, state
 
 
+class AdvancedDemandServerBusy(RuntimeError):
+    """Another checkpoint is using this server's CPU/RAM budget."""
+
+
 def process_next_batch(job_id: str) -> dict:
     folder = _job_folder(job_id)
-    # Prevent two open tabs from processing the same SQLite cursor simultaneously.
-    with (folder / ".job.lock").open("a+b") as lock:
+    if not (folder / "config.json").is_file():
+        raise FileNotFoundError("Saved batch job no longer exists on this server.")
+    JOBS_ROOT.mkdir(parents=True, exist_ok=True)
+    # Serialize heavy work ACROSS JOBS, not only across tabs for one job.
+    # Previously two separate job IDs could simultaneously load Stock Actual,
+    # build indexes, and exhaust RAM even with SQLite checkpoints enabled.
+    # Non-blocking lock avoids a second waiting Streamlit request tying up RAM.
+    with (JOBS_ROOT / ".server_checkpoint.lock").open("a+b") as server_lock:
         if fcntl is not None:
-            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            try:
+                fcntl.flock(server_lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise AdvancedDemandServerBusy(
+                    "Another Advanced Demand checkpoint is already processing. "
+                    "Wait for it to finish, then click Continue batches. "
+                    "Your current job's saved progress has not changed."
+                ) from exc
         try:
-            return _process_next_batch_locked(job_id, folder)
+            # Prevent two tabs with the SAME ID from processing the same cursor.
+            with (folder / ".job.lock").open("a+b") as job_lock:
+                if fcntl is not None:
+                    fcntl.flock(job_lock.fileno(), fcntl.LOCK_EX)
+                try:
+                    return _process_next_batch_locked(job_id, folder)
+                finally:
+                    if fcntl is not None:
+                        fcntl.flock(job_lock.fileno(), fcntl.LOCK_UN)
         finally:
             if fcntl is not None:
-                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+                fcntl.flock(server_lock.fileno(), fcntl.LOCK_UN)
 
 
 def _process_next_batch_locked(job_id: str, folder: Path) -> dict:
@@ -142,9 +172,13 @@ def _process_next_batch_locked(job_id: str, folder: Path) -> dict:
         del module
         gc.collect()
     os.utime(folder, None)
+    ram = ""
+    if resource is not None:
+        # Linux ru_maxrss is KB (peak, not current resident memory).
+        ram = f" peak_rss_mb={resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024:.0f}"
     print(f"[Advanced Demand batch {job_id[:8]}] phase={state['phase']} "
           f"source_rows={state['filter_offset']:,} "
-          f"salespeople={state['report_index']:,}", flush=True)
+          f"salespeople={state['report_index']:,}{ram}", flush=True)
     return state
 
 

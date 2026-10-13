@@ -200,3 +200,27 @@ def test_time_limited_batches_preserve_cursor_and_complete(tmp_path):
     assert state['phase'] == 'done'
     assert state['filter_offset'] == 7
     assert state['processed_filter_rows'] == 7
+
+
+def test_global_checkpoint_lock_prevents_parallel_jobs(tmp_path, monkeypatch):
+    """Different job IDs must not load two copies of Stock Actual concurrently."""
+    if controller.fcntl is None:
+        pytest.skip("POSIX flock required")
+    monkeypatch.setattr(controller, "JOBS_ROOT", tmp_path)
+    stock, filters = _multi_party_stock_and_filters()
+    one = controller.create_batch_job(stock_bytes=stock, filter_bytes=filters)
+    two = controller.create_batch_job(stock_bytes=stock, filter_bytes=filters)
+    invoked = []
+
+    def simulated_checkpoint(job_id, folder):
+        invoked.append(job_id)
+        with pytest.raises(controller.AdvancedDemandServerBusy, match="already processing"):
+            controller.process_next_batch(two)
+        return {"phase": "matching", "filter_offset": 0}
+
+    monkeypatch.setattr(controller, "_process_next_batch_locked", simulated_checkpoint)
+    assert controller.process_next_batch(one)["phase"] == "matching"
+    assert invoked == [one]
+    # The lock is released after the first checkpoint; the next job may proceed.
+    monkeypatch.setattr(controller, "_process_next_batch_locked", lambda job_id, folder: {"phase": "ready"})
+    assert controller.process_next_batch(two)["phase"] == "ready"
