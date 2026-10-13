@@ -51,6 +51,7 @@ from cloud_jobs.github_backend import (
     GitHubJobError,
     GitHubReleaseBackend,
 )
+from ui.download_fallback import MAX_INLINE_DOWNLOAD_BYTES, inline_download_link
 from ui.theme import apply_theme, hero, page_footer, section_header, sidebar_brand, sidebar_footer
 from ui.config_controls import (
     DEFAULT_PRIORITY_TYPES,
@@ -209,6 +210,15 @@ def _show_result(key: str, label: str) -> None:
         key=f"download_{key}",
         on_click="ignore",
     )
+    # This small-file link bypasses Streamlit's /media response endpoint, which
+    # can fail independently of successfully completed workbook generation.
+    # Only inline small files; embedding a large ZIP can freeze the browser.
+    direct_link = inline_download_link(
+        result["data"], result["filename"], result.get("mime", "application/zip")
+    )
+    if direct_link:
+        st.markdown(direct_link, unsafe_allow_html=True)
+        st.caption("Use the alternative link if the main download fails. For large reports, use the main button.")
     with st.expander("Processing details", expanded=False):
         st.write("Your files were processed successfully and the download package is ready.")
 
@@ -2282,7 +2292,15 @@ def advanced_demand_filter_page() -> None:
                         mime="application/zip",
                         use_container_width=True,
                         key="advanced_demand_batch_download",
+                        on_click="ignore",
                     )
+                # The checkpointed output is stored on disk; only embed it when
+                # small enough for the browser to download without an HTTP request.
+                if 0 < path.stat().st_size <= MAX_INLINE_DOWNLOAD_BYTES:
+                    direct_link = inline_download_link(path.read_bytes(), path.name)
+                    if direct_link:
+                        st.markdown(direct_link, unsafe_allow_html=True)
+                        st.caption("Alternative direct download for a small completed batch ZIP.")
         except Exception as exc:
             st.session_state["advanced_demand_batch_running"] = False
             _show_user_error("Batch processing stopped; progress is saved where possible", exc)
