@@ -231,3 +231,88 @@ def test_make_config_controls_exposed_without_changing_standard_mapper():
     assert "advanced_demand_min_stones_per_party" in advanced_page
     assert "advanced_demand_output_layout" in advanced_page
     assert "run_filter_demand(" not in advanced_page
+
+
+def test_streamed_large_report_matches_standard_content_style_and_hyperlinks(monkeypatch):
+    """Protect existing Excel layout if a large report selects write-only mode."""
+    import processors.advanced_demand_batch as batch
+    stock, rules = _multi_party_stock_and_filters()
+    sheet = pd.read_excel(io.BytesIO(stock), sheet_name="Sheet1")
+    sheet["CERTIFICATE"] = [f"https://example.test/cert/{i}" for i in range(len(sheet))]
+    stock_buffer = io.BytesIO()
+    with pd.ExcelWriter(stock_buffer, engine="openpyxl") as writer:
+        sheet.to_excel(writer, index=False, sheet_name="Sheet1")
+    stock = stock_buffer.getvalue()
+
+    monkeypatch.setattr(batch, "STREAM_REPORT_ROW_THRESHOLD", 1_000_000)
+    normal, _, _ = run_advanced_demand_filter(
+        stock_bytes=stock, filter_bytes=rules, output_layout="both"
+    )
+    monkeypatch.setattr(batch, "STREAM_REPORT_ROW_THRESHOLD", 1)
+    streamed, _, _ = run_advanced_demand_filter(
+        stock_bytes=stock, filter_bytes=rules, output_layout="both"
+    )
+
+    def get_xlsx_members(payload):
+        with zipfile.ZipFile(io.BytesIO(payload)) as outer:
+            result = {}
+            for file_name in outer.namelist():
+                if file_name.endswith(".zip"):
+                    with zipfile.ZipFile(io.BytesIO(outer.read(file_name))) as nested:
+                        for nested_name in nested.namelist():
+                            result[(file_name, nested_name)] = nested.read(nested_name)
+                else:
+                    result[(file_name,)] = outer.read(file_name)
+            return result
+
+    normal_files = get_xlsx_members(normal)
+    streamed_files = get_xlsx_members(streamed)
+    assert normal_files.keys() == streamed_files.keys()
+    for name in normal_files:
+        normal_book = load_workbook(io.BytesIO(normal_files[name]))
+        streamed_book = load_workbook(io.BytesIO(streamed_files[name]))
+        try:
+            assert normal_book.sheetnames == streamed_book.sheetnames
+            for sheet_name in normal_book.sheetnames:
+                original = normal_book[sheet_name]
+                optimized = streamed_book[sheet_name]
+                assert original.max_row == optimized.max_row
+                assert original.max_column == optimized.max_column
+                assert list(original.values) == list(optimized.values)
+                for row in original.iter_rows():
+                    for orig_cell in row:
+                        actual = optimized[orig_cell.coordinate]
+                        assert (
+                            actual.hyperlink.target if actual.hyperlink else None
+                        ) == (orig_cell.hyperlink.target if orig_cell.hyperlink else None)
+                        for prop in ("font", "fill", "border", "alignment", "number_format"):
+                            assert str(getattr(actual, prop)) == str(getattr(orig_cell, prop))
+        finally:
+            normal_book.close()
+            streamed_book.close()
+
+
+def test_predicate_cache_does_not_confuse_include_exclude_or_party_metadata():
+    """A cache hit can reuse matches, never party metadata, tags or rule remarks."""
+    stock = _stock_bytes()
+    filters = pd.DataFrame([
+        {"Sold Party": "ONE", "Sales_Person": "Agent", "Country": "IN", "Remarks": "INCLUDE", "Shp": "RBC"},
+        {"Sold Party": "ONE", "Sales_Person": "Agent", "Country": "US", "Remarks": "INCLUDE", "Shp": "RBC"},
+        {"Sold Party": "TWO", "Sales_Person": "Agent", "Country": "UK", "Remarks": "INCLUDE", "Shp": "RBC"},
+        {"Sold Party": "THREE", "Sales_Person": "Agent", "Country": "FR", "Remarks": "EXCLUDE", "Shp": "RBC"},
+    ])
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        filters.to_excel(writer, sheet_name="Change Format", index=False)
+    output, _, logs = run_advanced_demand_filter(stock_bytes=stock, filter_bytes=buf.getvalue())
+    assert "Unique filter rules processed: 4" in logs
+    assert "Matching predicate results reused: 2" in logs
+    with zipfile.ZipFile(io.BytesIO(output)) as archive:
+        workbook = load_workbook(io.BytesIO(archive.read("Agent.xlsx")))
+        try:
+            assert workbook.sheetnames == ["Navigation", "ONE", "TWO"]
+            assert workbook["Navigation"]["D2"].value == "IN"
+            assert workbook["Navigation"]["D3"].value == "UK"
+        finally:
+            workbook.close()
+

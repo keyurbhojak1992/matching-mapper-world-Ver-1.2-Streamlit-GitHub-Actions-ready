@@ -7,13 +7,19 @@ import re
 import sqlite3
 import tempfile
 import zipfile
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
 
 import numpy as np
 import pandas as pd
 from openpyxl import Workbook, load_workbook
+from openpyxl.cell import WriteOnlyCell
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side, numbers
+from openpyxl.utils import get_column_letter
 
 FILTER_RULE_BATCH_SIZE = 5000
+# Larger reports use openpyxl write-only worksheets to avoid storing every
+# formatted Excel cell in server RAM. Small reports retain the original writer.
+STREAM_REPORT_ROW_THRESHOLD = 20000
 
 
 def _mangle_duplicate_headers(headers):
@@ -330,6 +336,117 @@ def _add_styled_party_sheet(module, workbook, sheet_name, df_output):
     return ws_out
 
 
+def _add_styled_party_sheet_streaming(module, workbook, sheet_name, df_output):
+    """Write the existing report format with memory-bounded Excel cell creation.
+
+    Only used on large reports; matching, exclusions, sorting and sheet naming
+    have already completed in the original path before this is called.
+    """
+    ws = workbook.create_sheet(title=sheet_name)
+    retained_columns = [col for col in df_output.columns if col not in ("Match_Type", "Is_Filter_Match")]
+    # Preserve normal XLSX dimensions for downstream read-only consumers.
+    dimension = f"A1:{get_column_letter(len(retained_columns))}{len(df_output) + 1}"
+    ws.calculate_dimension = lambda: dimension
+    fixed_cols = {"CERTIFICATE", "VIDEO", "IMAGE", "DETAIL", "PHYGITAL"}
+    link_cols = {"CERTIFICATE", "VIDEO", "IMAGE", "DETAIL", "PHYGITAL", "LAYOUT"}
+    decimal_cols = module.DECIMAL_COLUMNS
+
+    # Write-only column widths must be assigned before the first row is appended.
+    for col_num, col_name in enumerate(retained_columns, start=1):
+        if col_name in fixed_cols:
+            width = 15
+        else:
+            data = df_output[col_name]
+            lengths = data[data.notna()].astype(str).str.len()
+            max_data_len = int(lengths.max()) if not lengths.empty else 0
+            width = (max(len(str(col_name)), max_data_len) + 2) * 1.2
+        ws.column_dimensions[get_column_letter(col_num)].width = width
+
+    border = Border(left=Side(style="thin"), right=Side(style="thin"),
+                    top=Side(style="thin"), bottom=Side(style="thin"))
+    alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    header_fill = PatternFill(start_color="D3D3D3", end_color="D3D3D3", fill_type="solid")
+    match_fills = {
+        "Exact": PatternFill(start_color="CCFFCC", end_color="CCFFCC", fill_type="solid"),
+        "Nearby": PatternFill(start_color="FFE699", end_color="FFE699", fill_type="solid"),
+        "Maybe": PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid"),
+    }
+    link_font = Font(color="0000FF", underline="single")
+
+    header_cells = []
+    for value in retained_columns:
+        cell = WriteOnlyCell(ws, value=value)
+        cell.fill = header_fill
+        cell.border = border
+        cell.alignment = alignment
+        header_cells.append(cell)
+    ws.append(header_cells)
+
+    original_columns = df_output.columns.tolist()
+    retained_indexes = [original_columns.index(col) for col in retained_columns]
+    match_idx = original_columns.index("Match_Type") if "Match_Type" in original_columns else None
+    for data_row in df_output.itertuples(index=False, name=None):
+        row_fill = match_fills.get(str(data_row[match_idx])) if match_idx is not None else None
+        output_cells = []
+        for col_name, idx in zip(retained_columns, retained_indexes):
+            value = data_row[idx]
+            cell = WriteOnlyCell(ws, value=value)
+            if col_name in link_cols and "http" in str(value).lower():
+                cell.value = col_name
+                cell.hyperlink = str(value)
+                cell.font = link_font
+            if col_name == "Sr.No":
+                cell.font = link_font
+            if col_name in decimal_cols and isinstance(value, (int, float)):
+                cell.number_format = numbers.FORMAT_NUMBER_00
+            cell.border = border
+            cell.alignment = alignment
+            if row_fill is not None:
+                cell.fill = row_fill
+            output_cells.append(cell)
+        ws.append(output_cells)
+    return ws
+
+
+def _add_navigation_sheet_streaming(workbook, ws, sheets_for_nav):
+    """Create the same navigation headers, link targets, styling and ordering."""
+    headers = ["Go To Sheet", "Party Name", "Count", "Country", "City", "Go →"]
+    dimension = f"A1:F{len(sheets_for_nav) + 1}"
+    ws.calculate_dimension = lambda: dimension
+    rows = [
+        [sheet_name, party_name, count, country, city, "Go →"]
+        for sheet_name, party_name, count, country, city in sheets_for_nav
+    ]
+    for col_num, header in enumerate(headers):
+        longest = max([len(str(header))] + [len(str(row[col_num])) for row in rows if row[col_num] is not None])
+        ws.column_dimensions[get_column_letter(col_num + 1)].width = (longest + 2) * 1.2
+
+    border = Border(left=Side(style="thin"), right=Side(style="thin"),
+                    top=Side(style="thin"), bottom=Side(style="thin"))
+    alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    header_fill = PatternFill(start_color="D3D3D3", end_color="D3D3D3", fill_type="solid")
+    header_font = Font(bold=True, color="0000FF")
+    first_row = []
+    for value in headers:
+        cell = WriteOnlyCell(ws, value=value)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.border = border
+        cell.alignment = alignment
+        first_row.append(cell)
+    ws.append(first_row)
+    for values in rows:
+        row = []
+        for idx, value in enumerate(values):
+            cell = WriteOnlyCell(ws, value=value)
+            cell.border = border
+            cell.alignment = alignment
+            if idx == 5:
+                escaped = values[0].replace("'", "''")
+                cell.hyperlink = f"#'{escaped}'!A1"
+            row.append(cell)
+        ws.append(row)
+
 def _unique_party_filename(party_name, used_names):
     """Avoid unsafe filenames and collisions in a salesperson's nested ZIP."""
     name = re.sub(r'[\\/*?:"<>|\x00-\x1f]', "_", str(party_name)).strip(" .")[:110]
@@ -407,7 +524,10 @@ def generate_salesperson_reports_batched(
         )
         conn.execute("CREATE INDEX idx_party_meta_sp ON party_meta(salesperson, first_seq)")
 
-        stock_cache = module.build_stock_filter_cache(stocks_df)
+        # INCLUDE rules normally run against a small indexed stock subset.
+        # Build the expensive full-stock cache only if an EXCLUDE/long-text
+        # rule actually needs a whole-stock scan. This preserves its semantics.
+        stock_cache = None
         candidate_index = DemandCandidateIndex(module, stocks_df)
 
         filter_wb = load_workbook(filter_file_path, read_only=True, data_only=True)
@@ -454,6 +574,21 @@ def generate_salesperson_reports_batched(
             first_match_seq = 0
             pending_since_commit = 0
             rank_map = {"Exact": 0, "Nearby": 1, "Maybe": 2}
+            # Reuse identical *matching predicates* across different parties or
+            # metadata. Match semantics still come from the untouched master
+            # engine; country, city, salesperson and related tags are applied
+            # separately for each rule below. REMARKS must be part of the key
+            # because INCLUDE and EXCLUDE have different matching semantics.
+            predicate_columns = [
+                col for col in headers
+                if module.normalize_column_key(col) not in module.METADATA_FILTER_KEYS
+                or module.normalize_column_key(col) == "REMARKS"
+            ]
+            match_cache = OrderedDict()
+            cache_row_count = 0
+            cache_hits = 0
+            MAX_CACHE_RULES = 256
+            MAX_CACHE_MATCHES = 20000
 
             print(f"Streaming Change Format in batches of {int(rule_batch_size):,} rules...")
             for raw_row in row_iter:
@@ -488,32 +623,66 @@ def generate_salesperson_reports_batched(
                 processed_filter_rows += 1
                 pending_since_commit += 1
 
-                candidate_labels = candidate_index.candidates_for_rule(rule, tolerance_level)
-                if candidate_labels is not None:
-                    if len(candidate_labels) == 0:
-                        if pending_since_commit >= rule_batch_size:
-                            conn.commit()
-                            print(f"  Processed {processed_filter_rows:,} unique rules...")
-                            pending_since_commit = 0
-                        continue
-                    working_df = stocks_df.loc[candidate_labels]
-                    working_cache = None
+                predicate_key = _stable_rule_digest(rule, predicate_columns)
+                if predicate_key in match_cache:
+                    cached_pairs = match_cache[predicate_key]
+                    match_cache.move_to_end(predicate_key)
+                    cache_hits += 1
+                    pairs_source = cached_pairs
+                    match_count = len(cached_pairs)
                 else:
-                    working_df = stocks_df
-                    working_cache = stock_cache
+                    candidate_labels = candidate_index.candidates_for_rule(rule, tolerance_level)
+                    if candidate_labels is not None:
+                        if len(candidate_labels) == 0:
+                            match_types = None
+                        else:
+                            working_df = stocks_df.loc[candidate_labels]
+                            working_cache = None
+                    else:
+                        working_df = stocks_df
+                        if stock_cache is None:
+                            stock_cache = module.build_stock_filter_cache(stocks_df)
+                        working_cache = stock_cache
 
-                rule_series = pd.Series(rule)
-                matched = module.apply_tolerance_filter(
-                    working_df, rule_series, tolerance_level, stock_cache=working_cache
-                )
-                if matched.empty:
+                    if candidate_labels is None or len(candidate_labels):
+                        rule_series = pd.Series(rule)
+                        matched = module.apply_tolerance_filter(
+                            working_df, rule_series, tolerance_level, stock_cache=working_cache
+                        )
+                        match_types = (
+                            module.classify_match_types_vectorized(matched, rule_series)
+                            if not matched.empty else None
+                        )
+                    match_count = len(match_types) if match_types is not None else 0
+                    if match_count <= MAX_CACHE_MATCHES:
+                        cached_pairs = (
+                            tuple((int(idx), rank_map.get(str(kind), 2)) for idx, kind in match_types.items())
+                            if match_count else ()
+                        )
+                        while match_cache and (
+                            len(match_cache) >= MAX_CACHE_RULES
+                            or cache_row_count + match_count > MAX_CACHE_MATCHES
+                        ):
+                            _, evicted = match_cache.popitem(last=False)
+                            cache_row_count -= len(evicted)
+                        match_cache[predicate_key] = cached_pairs
+                        cache_row_count += match_count
+                        pairs_source = cached_pairs
+                    else:
+                        # Broad rules can match all stocks. Do not retain these
+                        # giant result lists in the in-memory reuse cache.
+                        pairs_source = (
+                            (int(idx), rank_map.get(str(kind), 2))
+                            for idx, kind in match_types.items()
+                        )
+
+                if match_count == 0:
                     if pending_since_commit >= rule_batch_size:
                         conn.commit()
                         print(f"  Processed {processed_filter_rows:,} unique rules...")
                         pending_since_commit = 0
                     continue
 
-                match_types = module.classify_match_types_vectorized(matched, rule_series)
                 tag_value = ""
                 if module.ENABLE_RELATED_TAG:
                     raw_tag = rule.get("TAG_NO", rule.get("TAG", ""))
@@ -538,16 +707,18 @@ def generate_salesperson_reports_batched(
                     ),
                 )
 
-                match_rows = [
+                # sqlite3 accepts an iterator: do not create a second large
+                # list of every matched stone for broad rules.
+                match_rows = (
                     (
                         salesperson,
                         norm_party,
-                        int(stock_idx),
-                        rank_map.get(str(match_type), 2),
+                        stock_idx,
+                        match_rank,
                         tag_value,
                     )
-                    for stock_idx, match_type in match_types.items()
-                ]
+                    for stock_idx, match_rank in pairs_source
+                )
                 conn.executemany(
                     "INSERT INTO matches(salesperson, norm_party, stock_idx, match_rank, tag_no)"
                     " VALUES (?, ?, ?, ?, ?)"
@@ -559,7 +730,7 @@ def generate_salesperson_reports_batched(
                     match_rows,
                 )
                 matched_filter_rows += 1
-                matched_stock_links += len(match_rows)
+                matched_stock_links += match_count
 
                 if pending_since_commit >= rule_batch_size:
                     conn.commit()
@@ -594,9 +765,22 @@ def generate_salesperson_reports_batched(
                 "SELECT salesperson FROM salesperson_meta ORDER BY first_seq"
             ).fetchall()
             for (salesperson,) in salesperson_rows:
-                workbook = Workbook() if include_workbooks else None
+                # A salesperson workbook can contain many sheets; normal
+                # openpyxl holds every styled cell in memory until .save().
+                # Use its disk-backed write-only writer once the group is large.
+                total_group_links = (
+                    conn.execute("SELECT COUNT(*) FROM matches WHERE salesperson = ?", (salesperson,)).fetchone()[0]
+                    if include_workbooks else 0
+                )
+                stream_report = total_group_links >= STREAM_REPORT_ROW_THRESHOLD
+                workbook = Workbook(write_only=stream_report) if include_workbooks else None
+                nav_stream = None
                 if workbook is not None:
-                    workbook.remove(workbook.active)
+                    if stream_report:
+                        nav_stream = workbook.create_sheet(title="Navigation")
+                    else:
+                        workbook.remove(workbook.active)
+
                 sheets_for_nav = []
                 global_exclusion_rules = global_exclusion_by_sp.get(salesperson, pd.DataFrame())
                 party_rows = conn.execute(
@@ -697,13 +881,21 @@ def generate_salesperson_reports_batched(
                         used_sheet_names.add(valid_sheet_name.casefold())
 
                         if workbook is not None:
-                            _add_styled_party_sheet(module, workbook, valid_sheet_name, result)
+                            if stream_report:
+                                _add_styled_party_sheet_streaming(module, workbook, valid_sheet_name, result)
+                            else:
+                                _add_styled_party_sheet(module, workbook, valid_sheet_name, result)
                         if party_zip is not None:
                             # Independent Excel files contain only their own party sheet,
                             # since a Navigation link to absent sheets would be invalid.
-                            single_book = Workbook()
-                            single_book.remove(single_book.active)
-                            _add_styled_party_sheet(module, single_book, valid_sheet_name, result)
+                            stream_single = len(result) >= STREAM_REPORT_ROW_THRESHOLD
+                            single_book = Workbook(write_only=stream_single)
+                            if stream_single:
+                                _add_styled_party_sheet_streaming(module, single_book, valid_sheet_name, result)
+                            else:
+                                single_book.remove(single_book.active)
+                                _add_styled_party_sheet(module, single_book, valid_sheet_name, result)
+
                             temp_xlsx = os.path.join(temp_dir, f"advanced_separate_{unique_sp}.xlsx")
                             try:
                                 single_book.save(temp_xlsx)
@@ -727,20 +919,24 @@ def generate_salesperson_reports_batched(
                     continue
 
                 if workbook is not None:
-                    nav_ws = workbook.create_sheet(title="Navigation", index=0)
-                    nav_headers = ["Go To Sheet", "Party Name", "Count", "Country", "City", "Go \u2192"]
-                    for col_num, header_name in enumerate(nav_headers, start=1):
-                        nav_ws.cell(row=1, column=col_num, value=header_name)
-                    for row_num, (sheet_name, party_name, count, country, city) in enumerate(sheets_for_nav, start=2):
-                        nav_ws.cell(row=row_num, column=1, value=sheet_name)
-                        nav_ws.cell(row=row_num, column=2, value=party_name)
-                        nav_ws.cell(row=row_num, column=3, value=count)
-                        nav_ws.cell(row=row_num, column=4, value=country)
-                        nav_ws.cell(row=row_num, column=5, value=city)
-                        escaped_name = sheet_name.replace("'", "''")
-                        nav_ws.cell(row=row_num, column=6, value="Go \u2192").hyperlink = f"#'{escaped_name}'!A1"
-                    module.apply_styles_to_worksheet(nav_ws)
-                    module.auto_adjust_column_widths(nav_ws)
+                    if stream_report:
+                        _add_navigation_sheet_streaming(workbook, nav_stream, sheets_for_nav)
+                    else:
+                        nav_ws = workbook.create_sheet(title="Navigation", index=0)
+                        nav_headers = ["Go To Sheet", "Party Name", "Count", "Country", "City", "Go →"]
+                        for col_num, header_name in enumerate(nav_headers, start=1):
+                            nav_ws.cell(row=1, column=col_num, value=header_name)
+                        for row_num, (sheet_name, party_name, count, country, city) in enumerate(sheets_for_nav, start=2):
+                            nav_ws.cell(row=row_num, column=1, value=sheet_name)
+                            nav_ws.cell(row=row_num, column=2, value=party_name)
+                            nav_ws.cell(row=row_num, column=3, value=count)
+                            nav_ws.cell(row=row_num, column=4, value=country)
+                            nav_ws.cell(row=row_num, column=5, value=city)
+                            escaped_name = sheet_name.replace("'", "''")
+                            nav_ws.cell(row=row_num, column=6, value="Go →").hyperlink = f"#'{escaped_name}'!A1"
+                        module.apply_styles_to_worksheet(nav_ws)
+                        module.auto_adjust_column_widths(nav_ws)
+
                     temp_xlsx = os.path.join(temp_dir, f"{unique_sp}.xlsx")
                     try:
                         workbook.save(temp_xlsx)
@@ -763,6 +959,7 @@ def generate_salesperson_reports_batched(
     print(f"Blank filter rows skipped: {blank_filter_rows:,}")
     print(f"Rules that produced matches: {matched_filter_rows:,}")
     print(f"Matched stock links before party dedupe: {matched_stock_links:,}")
+    print(f"Matching predicate results reused: {cache_hits:,}")
     print(f"Salesperson groups created: {reports_created:,}")
     print(f"Party sheets removed below minimum: {below_minimum_parties:,}")
     print(f"Separated party Excel files created: {separated_party_files:,}")
