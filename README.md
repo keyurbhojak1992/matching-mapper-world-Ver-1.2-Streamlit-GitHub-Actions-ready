@@ -1,153 +1,37 @@
-# Matching Mapper World — Streamlit + GitHub Actions worker
+# TINC_NAME + SINC_NAME: short & full names (combined update)
 
-A private Streamlit interface for diamond matching, demand mapping, suggested-stock generation, output prioritization, BID drop diagnostics, and workbook distribution.
+This package COMBINES the two previous updates: **TINC_SINC_COLUMNS_ONLY_UPDATE.zip** and **REGAL_265_STONES_BATCH_FIX.zip**. The existing code already contains two-way normalization; this is a convenient single installation package, **not a new behavior change** over the two fixes together.
 
-**Advanced Demand Filter (v1.9.9.5):** click **Make Config** to set a minimum final stone count per party and choose the output ZIP layout (regular salesperson workbooks, per-salesperson ZIPs of separate party Excel files, or both). See [ADVANCED_DEMAND_MAKE_CONFIG_UPDATE.md](ADVANCED_DEMAND_MAKE_CONFIG_UPDATE.md).
+## Supported names in BOTH filters and stock
 
-## Recommended deployment
+- `MIN` and `MINOR` are the same. E.g., `MIN FEATHER` = `MINOR FEATHER`.
+- `MED` and `MEDIUM` are the same. E.g., `MED CLOUD` = `MEDIUM CLOUD`.
+- `HVY` and `HEAVY` are the same. E.g., `HVY SPREADED` = `HEAVY SPREADED`.
+- `CRYSTEAL 1/2/3` and `CRYSTAL 1/2/3` also normalize to the three user-supplied grade positions.
+- `NONE` and `NON` normalize to `NONE`.
+- Matching is case-insensitive and ignores surplus whitespace.
+- This works in both directions for both `TINC_NAME` and `SINC_NAME`, including inclusive `A TO B` ranges, comma-separated grades, and exclusions beginning with `!`.
 
-```text
-Private GitHub repository
-        ↓
-Private Streamlit Community Cloud app
-        ↓
-Temporary private GitHub draft release
-        ↓
-GitHub Actions batch worker
-        ↓
-Private downloadable combined ZIP
-```
+The 18-grade order is **the same as the user's original list** (not alphabetical). `MINOR/MEDIUM/HEAVY` are aliases of the 18 grades; they do not introduce extra grades.
 
-Start with [`START_HERE.md`](START_HERE.md). The full one-time setup, security model, testing sequence, and troubleshooting guide are in [`STREAMLIT_GITHUB_SETUP.md`](STREAMLIT_GITHUB_SETUP.md).
+## Files included (exact repository paths)
 
-### New in 1.8.0
+Copy the six files in `original_master_code/` into that directory, and copy `processors/advanced_demand_batch.py` into `processors/`. Five original master files + one NEW `inclusion_rules.py` + one existing batch processor file. No other application files are changed.
 
-- **Auto Pricing**: the recommended tab runs Dataset Finalizer v4.1.4 from RAW ZIP + previous finalized base ZIP, applies the Git-tracked `data/remove_parties.xlsx` list (or an uploaded override), validates all eight base datasets, and builds the formatted Auto Pricing workbook. The previous prepared-base calculation mode remains available for compatibility.
-- **Dealmaker**: runs the complete supplied v8.2.2 production package, including preflight, staged allocation, deal books, and release-gate audit. The verified bundled `Dealmaker_Full_Control_v6.xlsx` is used by default; an updated control workbook can be uploaded per run without changing the bundled base.
-- **Layout Stock Matcher**: runs the preserved layout matching engine from Layout Stock, Sales, and Actions with the source defaults and optional source-supported controls.
-- **USA Suggested Stock Mapper** remains available from v1.7.0.
+**Install all seven files together** if you have not applied both earlier patches; otherwise this package makes no additional logic changes. Back up / commit before replacing, then redeploy Streamlit.
 
-## Heavy Suggested Stock Mapper runs
+Keep two separate column headers in the `Change Format` worksheet of the active filters workbook: `TINC_NAME` and `SINC_NAME`. Stock file headers need no modifications. If you use an app default filter workbook, ensure it has these updated headers too.
 
-The Suggested page supports two destinations:
+## Verification conducted
 
-- **GitHub Actions full run** — packages the uploaded inputs, sends them to a private GitHub draft release, and processes salesperson batches on a standard private-repository runner.
-- **Run inside Streamlit** — retained for small diagnostic tests only.
+- 18/18 grade values tested as short/full equivalents, **both directions**.
+- All four main map/filter functions tested for both fields across 6 short/full combinations each.
+- For both fields, all 18 grade values produced identical stone IDs in the currently uploaded 1,144-row stock file using short or full filter names.
+- REGAL Advanced Demand batch candidate index vs full filter, strict tolerance zero, no other exclusions: **356/356** eligible stones, reproducing the earlier missing-265 fix.
+- Focused existing tests: **38 passed, 2 deselected**; the two deselected tests rely on the earlier 18,849-row Stock Actual workbook, but the current `Stock Actual.xlsx` upload is now the 1,144-row BID workbook (identical to `Stock Actual_BID280.xlsx`). This was a test-fixture count mismatch, not a production matching failure.
 
-For cloud full runs, the worker can discover all salesperson names from the current Parquet profiles and Filters workbook. The optional UI scan is needed only when you want uploaded names in the manual selection lists. Every selected configuration is copied to each batch. Only these runtime values are changed per batch:
+## Important scope
 
-```python
-batch_runtime["TEST_MODE"] = True
-batch_runtime["TEST_SALESPEOPLE"] = current_batch
-```
-
-Each batch runs in a fresh subprocess to release pandas, PyArrow, openpyxl, and workbook memory before the next group. The workflow also uses one global concurrency group so two heavy Suggested workers do not run simultaneously.
-
-## Final combined output
-
-Batching is only an internal memory-safety mechanism. After all available batches finish, the adapter restores the normal full-run layout:
-
-```text
-suggested_reports_final_combined.zip
-├── MASTER_CONSOLIDATED_REPORT.xlsx       # one global merged master, when enabled
-├── Mr. Example Salesperson.xlsx          # every individual salesperson workbook, when enabled
-├── Mr. Example Salesperson_Separated_Parties.zip
-├── ...
-├── _batch_diagnostics/                    # logs/runtime snapshots only
-├── batch_manifest.json
-├── processing_log.txt
-└── FINAL_OUTPUT_README.txt
-```
-
-The global master is assembled in low-memory streaming mode and preserves the original master output rules for column order, row fills, borders, decimal formats, and widths. Version 1.5.0 strictly creates one worksheet named `Master_Data` whenever the result fits Excel's hard worksheet row limit. Links are written as `HYPERLINK()` formulas, and the intermediate `MAX_ROWS_PER_SHEET` configuration no longer splits the final downloaded master. The preserved source scripts in `original_master_code/` are invoked through adapters; the sorting source now includes hyperlink rebinding and formula translation, and the BID drop diagnostic source has been added as its own process.
-
-## Master-code protection
-
-The verified process sources remain in `original_master_code/` and are invoked through thin deployment adapters:
-
-```text
-Suggested_Process.py
-Filter_Demand_Stock_Process.py
-Separated_Excel_Files.py
-Sorting_Suggested_Output_Zip_Process.py
-BID_Drop_Checking_Process.py
-```
-
-Adapters provide temporary paths, runtime overrides, Linux-compatible upload/download handling, logs, and batching. `SOURCE_CHECKSUMS.sha256` records the included source hashes.
-
-## Other workflows
-
-- **Auto Pricing** — includes the finalized Auto Pricing data-preparation pipeline plus the preserved prepared-base mode. The full pipeline enforces whole boundary-date refresh, Hold `SERIAL_NO`, row-level View handling, Sales SPer/SRate overlap refresh, blank Lab/Flo → `NON`, and Git-default Removed Parties filtering.
-- **Dealmaker** — invokes the supplied v8.2.2 production runner directly. Use the bundled control base or upload an updated `Dealmaker_Full_Control_v6.xlsx` for the current run.
-- **Layout Stock Matcher** — invokes the preserved layout matching source with Layout Stock, Sales, and Actions uploads.
-- **Demand Filter Mapper** — applies the preserved demand/filter process.
-- **Advanced Demand Filter** — isolated workflow based on the uploaded advanced-demand source. Stock Actual + Filters are required uploads, No Need is optional, no repository rule files are used as defaults, and large `Change Format` sheets are streamed in 5,000-rule batches with temporary disk-backed match accumulation.
-- **Sort Suggested Output** — runs the hyperlink-safe sorting process with web-configurable controls.
-- **Suggested List Splitter** — groups each salesperson's suggested workbooks into `Under 10 Stones` and `10+ Stones` ZIP folders by counting populated Serial No rows.
-- **BID Drop Checking Process** — creates a deep-gap diagnostic workbook from suggested results, bids, sales/actions, stock, filters, and exclusions.
-- **Separate Excel Sheets** — uses a Linux-compatible openpyxl adapter because the preserved desktop script depends on Windows Excel COM.
-
-## Repository default data files
-
-The Suggested Stock Mapper and BID Drop Checking Process use repository defaults when the matching upload is omitted:
-
-```text
-data/PARTY_PROFILE_PERM.parquet
-data/PARTY_PROFILE_TEMP.parquet
-defaults/suggested_rules.py  # built-in Filters + No-need rule dictionaries
-```
-
-Uploaded files always override the repository copy. The four business-data files must be committed to the private repository; the app does not generate them.
-
-## Local development
-
-```bash
-python -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
-python -m pip install --upgrade pip
-pip install -r requirements.txt
-streamlit run app.py
-```
-
-For local GitHub job submission, copy `.streamlit/secrets.toml.example` to `.streamlit/secrets.toml` and insert the private repository settings. Never commit that file.
-
-## Repository layout
-
-```text
-.
-├── app.py
-├── adapters/
-├── cloud_jobs/                   # Streamlit-side bundle and GitHub API client
-├── cloud_worker/                 # GitHub Actions runner entry points
-├── data/                         # administrator-managed default profiles/rule workbooks
-├── .github/workflows/
-├── original_master_code/
-├── tests/
-├── ui/
-├── START_HERE.md
-├── STREAMLIT_GITHUB_SETUP.md
-├── requirements.txt
-└── requirements-worker.txt
-```
-
-## Data handling
-
-The four administrator-managed default inputs are stored in the private repository under `data/`. Job-specific uploads are temporarily stored as assets on a private draft release and on an ephemeral GitHub Actions runner. The input asset is deleted after processing; the result remains private until the user downloads it and clicks **Delete job files**. Confirm that both repository storage and temporary release storage are permitted by your organization's data policy.
-
-## Copyright
-
-Developed by **Keyur Bhojak** for diamond matching and stock recommendation analysis.
-
-Copyright © 2026 Keyur Bhojak. All rights reserved.
-
-
-## Auto Pricing v1.9.2
-
-Auto Pricing uses individual Excel uploads. Stock and Sales current files plus the previous 120-day and 180-day Sales files are required. View, Hold, Offer, Wishlist and Cart files are optional. The Removed Parties list is stored with the application and is applied automatically. The final Auto Pricing workbook is created directly by the application; no separate template file is required.
-
-### Auto Pricing Stock history note
-In Full Pipeline mode, **no previous Stock file is required**. Stock is rebuilt entirely from the latest Stock RAW snapshot. Previous history is required only for Sales 120/180 and the action datasets (View, Hold, Offer, Wishlist, Cart).
-
-### Auto Pricing header mapping update (2026-10-09; v1.9.9.1)
-
-The Auto Pricing **Create Latest Output** tab now shows a **Check source-to-final column mapping** preview. October 2026 renamed Cart / Offer / Wishlist fields (including `Created Date`, `Color`, `Quality` and inclusion names) are mapped to unchanged canonical output names. Unmapped required columns block processing; `Hold.PARTY_CODE` cannot be inferred from Party Name. Details and additional file requirements are in `UPDATE_COLUMN_MAPPING_2026-10-09.md`.
+- This patch does not change unrelated filtering, sorting, prices, Dealmaker, Layout Stock Matcher, `Removed Party`, app defaults, or output formatting.
+- Basic/Advanced Demand retain their existing tolerance settings; Suggested/Pricing/BID remain exact for these inclusion columns.
+- The 356 eligible stone count applies only to the supplied `regal.xlsx`, 1,144-row stock, tolerance=0, and **no additional exclusions**. Your final app report can differ if `Removed Party`, `no_need.xlsx`, or other controls apply.

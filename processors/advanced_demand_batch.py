@@ -259,6 +259,13 @@ class DemandCandidateIndex:
                 candidate = self.numeric_candidates(stock_col, val_str, allow_no_dot=True)
             elif filter_col == "MEASUREMENT":
                 candidate = self.measurement_candidates(stock_col, val_str)
+            elif filter_key in {"TINCNAME", "SINCNAME"}:
+                # The 18-grade inclusion matcher normalizes stock spellings such as
+                # MINOR FEATHER -> MIN FEATHER. This raw-text candidate index does
+                # not, so filtering here would silently discard valid stones.
+                # Defer these two fields to apply_tolerance_filter, which applies
+                # the canonical grades and the user's tolerance setting correctly.
+                candidate = None
             elif filter_col in m.ORDER_MAPPING:
                 order = m.ORDER_MAPPING[filter_col]
                 apply_map = bool(m.ENABLE_FLO_MAPPING and filter_col == "FLO")
