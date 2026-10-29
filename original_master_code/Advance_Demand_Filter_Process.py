@@ -13,6 +13,7 @@ from openpyxl.worksheet.hyperlink import Hyperlink
 from copy import copy
 import tempfile
 import shutil
+from original_master_code.inclusion_rules import INCLUSION_COLUMNS, INCLUSION_ORDER, inclusion_condition
 
 # --- USER INPUT SECTION ---
 # ==========================
@@ -108,6 +109,8 @@ ORDER_MAPPING = {
     'TBINC_NAME': TBINC_SBINC_ORDER,
     'SBINC_NAME': TBINC_SBINC_ORDER,
     'TABLE INCL': [],
+    'TINC_NAME': INCLUSION_ORDER,
+    'SINC_NAME': INCLUSION_ORDER,
 }
 
 DECIMAL_COLUMNS = ['Carat', 'RapRate', 'Reserve%', 'Rate', 'Amount', 'Ratio', 'Dep', 'Tab', 'Girdle', 'C/A', 'C/H', 'P/A', 'P/H', 'Disc%', 'Price/carat', 'Total Amount', 'Depth', 'Table']
@@ -709,7 +712,7 @@ def apply_tolerance_filter(df, filter_rules, tolerance_level, stock_cache=None):
         'SBINC_NAME': 'SBINC_NAME', 'MEASUREMENT': 'Measurement',
         'REMARKS': 'Remarks', 'COLOR NAME': 'Color', 'CARAT': 'Carat',
         'RESERVE%': 'Disc%', 'RATIO': 'Ratio', 'RATE': 'Rate', 'RAPRATE': 'RapRate',
-        'AMOUNT': 'Amount', 'TABLE INCL': 'Table Incl', 'DEP': 'Dep', 'TAB': 'Tab',
+        'AMOUNT': 'Amount', 'TABLE INCL': 'Table Incl', 'TINC_NAME': 'TINC_NAME', 'SINC_NAME': 'SINC_NAME', 'DEP': 'Dep', 'TAB': 'Tab',
         'C/A': 'C/A', 'C/H': 'C/H', 'P/A': 'P/A', 'P/H': 'P/H', 'GIRDLE': 'Girdle',
         'DIA': 'Dia', 'SGP COMMENT': 'SGPComment', 'SGPCOMMENT': 'SGPComment',
         'KEYTOSYMBOL': 'KeyToSymbol', 'COMMENT': 'comment', 'COLOR DESC': 'Color Desc',
@@ -737,14 +740,20 @@ def apply_tolerance_filter(df, filter_rules, tolerance_level, stock_cache=None):
             stock_col = resolve_stock_column(filter_col, df, column_mapping)
 
         if not stock_col:
+            if filter_key in {'TINCNAME', 'SINCNAME'}:
+                raise ValueError(f'Missing stock column required by filter: {filter_col}')
             # Future column is simply ignored when it does not exist in stock.
             continue
 
         try:
             val_str = str(filter_value).strip().upper()
 
+            # These two inclusion columns have a dedicated 18-grade ordered matcher.
+            if filter_key in {'TINCNAME', 'SINCNAME'}:
+                conditions.append(inclusion_condition(df[stock_col], val_str, tolerance_level))
+
             # Shape and Lab remain strict (no +/- tolerance).
-            if filter_col in ['SHP', 'LAB']:
+            elif filter_col in ['SHP', 'LAB']:
                 acc = parse_filter_value(val_str, tolerance_level=0)
                 series_upper = upper_cache.get(stock_col)
                 if series_upper is None:
@@ -812,6 +821,8 @@ def apply_tolerance_filter(df, filter_rules, tolerance_level, stock_cache=None):
                 conditions.append(series_upper.isin(acc) if acc else pd.Series(False, index=df.index))
 
         except Exception as exc:
+            if filter_key in {'TINCNAME', 'SINCNAME'}:
+                raise
             print(f"    WARNING: filter column '{filter_col}' could not be applied: {exc}")
             continue
 

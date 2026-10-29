@@ -13,6 +13,7 @@ from openpyxl.worksheet.hyperlink import Hyperlink
 from copy import copy
 import tempfile
 import shutil
+from original_master_code.inclusion_rules import INCLUSION_COLUMNS, INCLUSION_ORDER, inclusion_condition
 
 # --- USER INPUT SECTION ---
 # ==========================
@@ -71,6 +72,8 @@ ORDER_MAPPING = {
     'TBINC_NAME': TBINC_SBINC_ORDER,
     'SBINC_NAME': TBINC_SBINC_ORDER,
     'TABLE INCL': [],
+    'TINC_NAME': INCLUSION_ORDER,
+    'SINC_NAME': INCLUSION_ORDER,
 }
 
 DECIMAL_COLUMNS = ['Carat', 'RapRate', 'Reserve%', 'Rate', 'Amount', 'Ratio', 'Dep', 'Tab', 'Girdle', 'C/A', 'C/H', 'P/A', 'P/H', 'Disc%', 'Price/carat', 'Total Amount', 'Depth', 'Table']
@@ -316,7 +319,7 @@ def apply_tolerance_filter(df, filter_rules, tolerance_level):
             'SBINC_NAME': 'SBINC_NAME', 'MEASUREMENT': 'Measurement',
             'REMARKS': 'Remarks', 'COLOR NAME': 'Color', 'CARAT': 'Carat',
             'RESERVE%': 'Disc%', 'RATIO': 'Ratio', 'RATE': 'Rate', 'RAPRATE': 'RapRate', # 👈 Changed 'Reserve%' to 'Disc%' here
-            'AMOUNT': 'Amount', 'TABLE INCL': 'Table Incl', 'DEP': 'Dep', 'TAB': 'Tab'
+            'AMOUNT': 'Amount', 'TABLE INCL': 'Table Incl', 'TINC_NAME': 'TINC_NAME', 'SINC_NAME': 'SINC_NAME', 'DEP': 'Dep', 'TAB': 'Tab'
     }
     remarks = str(filter_rules.get('REMARKS', 'INCLUDE')).strip().upper()
 
@@ -324,11 +327,16 @@ def apply_tolerance_filter(df, filter_rules, tolerance_level):
         # Added TAG_NO here so it doesn't get treated as a filter condition
         if filter_col in ['SOLD PARTY', 'NORMALIZED PARTY', 'REMARKS', 'SALES_PERSON', 'TAG_NO'] or pd.isna(filter_value) or str(filter_value).strip() == '': continue
         stock_col = column_mapping.get(filter_col)
-        if not stock_col or stock_col not in filtered_df.columns: continue
+        if not stock_col or stock_col not in filtered_df.columns:
+            if filter_col in INCLUSION_COLUMNS:
+                raise ValueError(f'Missing stock column required by filter: {filter_col}')
+            continue
 
         try:
             val_str = str(filter_value).strip().upper()
-            if filter_col in ['SHP', 'CARAT', 'LAB']:
+            if filter_col in INCLUSION_COLUMNS:
+                conditions.append(inclusion_condition(filtered_df[stock_col], val_str, tolerance_level))
+            elif filter_col in ['SHP', 'CARAT', 'LAB']:
                 if filter_col == 'CARAT': cond = parse_carat_filter(filtered_df[stock_col], val_str)
                 else:
                     acc = parse_filter_value(val_str, tolerance_level=0)
@@ -353,7 +361,10 @@ def apply_tolerance_filter(df, filter_rules, tolerance_level):
             else:
                 acc = parse_filter_value(val_str, tolerance_level=0)
                 if acc: conditions.append(filtered_df[stock_col].astype(str).str.upper().isin(acc))
-        except: continue
+        except:
+            if filter_col in INCLUSION_COLUMNS:
+                raise
+            continue
 
     if not conditions: return pd.DataFrame()
     final_cond = pd.Series(True, index=filtered_df.index)

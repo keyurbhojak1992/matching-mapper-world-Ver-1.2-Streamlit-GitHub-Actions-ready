@@ -13,6 +13,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.styles import Alignment, Border, Side, PatternFill, Font, numbers
 from openpyxl import Workbook
 import numpy as np
+from original_master_code.inclusion_rules import INCLUSION_COLUMNS, INCLUSION_ORDER, inclusion_condition
 
 # =============================================================================
 # --- USER INPUT SECTION ---
@@ -237,7 +238,7 @@ ORDER_MAPPING = {
     'TOIN_NAME': TOIN_SOIN_GIRDLE_PAV_OPEN_ORDER, 'SOIN_NAME': TOIN_SOIN_GIRDLE_PAV_OPEN_ORDER,
     'GIRDLE_OPEN_NAME': TOIN_SOIN_GIRDLE_PAV_OPEN_ORDER, 'PAV_OPEN_NAME': TOIN_SOIN_GIRDLE_PAV_OPEN_ORDER,
     'TBINC_NAME': TBINC_SBINC_ORDER, 'SBINC_NAME': TBINC_SBINC_ORDER,
-    'TABLE INCL': TB_INC_SB_INC_ORDER, 'SINC_NAME': TB_INC_SB_INC_ORDER
+    'TABLE INCL': TB_INC_SB_INC_ORDER, 'TINC_NAME': INCLUSION_ORDER, 'SINC_NAME': INCLUSION_ORDER
 }
 
 DECIMAL_COLUMNS = ['Carat', 'RapRate', 'Reserve%', 'Rate', 'Amount', 'Ratio', 'Dep', 'Tab',
@@ -804,7 +805,7 @@ def apply_advanced_filters(df, filter_rules):
         'TBINC_NAME': 'TBINC_NAME', 'SBINC_NAME': 'SBINC_NAME', 'MEASUREMENT': 'Measurement',
         'REMARKS': 'Remarks', 'COLOR NAME': 'Color', 'CARAT': 'Carat', 'RESERVE%': 'Reserve%',
         'RATIO': 'Ratio', 'RATE': 'Rate', 'RAPRATE': 'RapRate', 'AMOUNT': 'Amount',
-        'TABLE INCL': 'Table Incl', 'TAB': 'Tab', 'C/A': 'C/A', 'DEP': 'Dep', 'C/H': 'C/H',
+        'TABLE INCL': 'Table Incl', 'TINC_NAME': 'TINC_NAME', 'SINC_NAME': 'SINC_NAME', 'TAB': 'Tab', 'C/A': 'C/A', 'DEP': 'Dep', 'C/H': 'C/H',
         'P/A': 'P/A', 'P/H': 'P/H', 'GIRDLE': 'Girdle', 'DIA': 'Dia',
         'SGP COMMENT': 'SGPComment', 'SGPCOMMENT': 'SGPComment',
         'KEYTOSYMBOL': 'KeyToSymbol', 'COMMENT': 'Comment', 'COLOR DESC': 'Color Desc',
@@ -829,11 +830,15 @@ def apply_advanced_filters(df, filter_rules):
             if matched_col:
                 stock_col = matched_col
             else:
+                if filter_col in INCLUSION_COLUMNS:
+                    raise ValueError(f"Missing stock column required by filter: {filter_col}")
                 continue
 
         try:
             val_str = str(filter_value).strip().upper()
-            if filter_col in ['CARAT', 'RESERVE%', 'DISC%', 'RATIO', 'RATE', 'RAPRATE',
+            if filter_col in INCLUSION_COLUMNS:
+                conditions.append(inclusion_condition(filtered_df[stock_col], val_str))
+            elif filter_col in ['CARAT', 'RESERVE%', 'DISC%', 'RATIO', 'RATE', 'RAPRATE',
                               'AMOUNT', 'TAB', 'C/A', 'DEP', 'C/H', 'P/A', 'P/H', 'GIRDLE', 'DIA']:
                 cond = parse_carat_filter(filtered_df[stock_col], val_str) if filter_col == 'CARAT' else parse_numeric_filter(filtered_df[stock_col], val_str)
                 conditions.append(cond)
@@ -901,6 +906,8 @@ def apply_advanced_filters(df, filter_rules):
                     for c in col_conds: comb &= c
                     conditions.append(comb)
         except:
+            if filter_col in INCLUSION_COLUMNS:
+                raise
             continue
 
     if not conditions: return pd.DataFrame()

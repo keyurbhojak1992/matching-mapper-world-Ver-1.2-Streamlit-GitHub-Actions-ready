@@ -3,6 +3,7 @@ import numpy as np
 from io import StringIO
 import re
 import os
+from original_master_code.inclusion_rules import INCLUSION_ORDER, inclusion_value_matches
 
 # =============================================================================
 # 0. CONFIGURATION & GRADE ORDERS
@@ -824,6 +825,8 @@ def run_bid_drop_check(
             'RATIO': ('Ratio', 'numeric', None),
             'TAB': ('Tab', 'numeric', None),
             'C/A': ('C/A', 'numeric', None),
+            'TINC_NAME': ('TINC_NAME', 'text', INCLUSION_ORDER),
+            'SINC_NAME': ('SINC_NAME', 'text', INCLUSION_ORDER),
             'TBINC_NAME': ('TBINC_NAME', 'text', None),
             'SBINC_NAME': ('SBINC_NAME', 'text', None),
             'TOIN_NAME': ('TOIN_NAME', 'text', None),
@@ -848,6 +851,12 @@ def run_bid_drop_check(
                 continue
 
             stone_val = clean_cell_value(stone.get(stock_col, ""))
+
+            if rule_col in {'TINC_NAME', 'SINC_NAME'}:
+                if not inclusion_value_matches(stone_val, rule_val):
+                    return False, []
+                reasons.append(f'{rule_col} matches {rule_val}')
+                continue
 
             parts = [p.strip() for p in rule_val.split(',') if p.strip()]
             inc_rules = [p for p in parts if not p.startswith('!')]
