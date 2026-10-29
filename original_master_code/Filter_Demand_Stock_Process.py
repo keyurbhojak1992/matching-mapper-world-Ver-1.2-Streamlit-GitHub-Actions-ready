@@ -305,6 +305,32 @@ def parse_measurement_filter(series, filter_string):
         return full_cond
     except: return pd.Series(True, index=series.index)
 
+def build_long_text_filter_condition(series, filter_value):
+    """SGP Comment, KeyToSymbol, Comment: OR positives, AND !negative terms.
+
+    Mirrors the existing Advanced Demand and Suggested substring behavior:
+    case, whitespace, and punctuation are ignored on both sides.
+    """
+    terms = [v.strip() for v in str(filter_value).split(',') if v.strip()]
+    positive = [v for v in terms if not v.startswith('!')]
+    negative = [v[1:].strip() for v in terms if v.startswith('!') and v[1:].strip()]
+    normalize = lambda s: re.sub(r'[^A-Z0-9]+', '', str(s).upper())
+    normalized = series.fillna('').astype(str).map(normalize)
+    mask = pd.Series(True, index=series.index)
+    if positive:
+        found = pd.Series(False, index=series.index)
+        for phrase in positive:
+            term = normalize(phrase)
+            if term:
+                found |= normalized.str.contains(re.escape(term), regex=True, na=False)
+        mask &= found
+    for phrase in negative:
+        term = normalize(phrase)
+        if term:
+            mask &= ~normalized.str.contains(re.escape(term), regex=True, na=False)
+    return mask if positive or negative else pd.Series(False, index=series.index)
+
+
 def apply_tolerance_filter(df, filter_rules, tolerance_level):
     if df.empty or filter_rules.empty: return pd.DataFrame()
     filtered_df = df.copy()
@@ -319,7 +345,9 @@ def apply_tolerance_filter(df, filter_rules, tolerance_level):
             'SBINC_NAME': 'SBINC_NAME', 'MEASUREMENT': 'Measurement',
             'REMARKS': 'Remarks', 'COLOR NAME': 'Color', 'CARAT': 'Carat',
             'RESERVE%': 'Disc%', 'RATIO': 'Ratio', 'RATE': 'Rate', 'RAPRATE': 'RapRate', # 👈 Changed 'Reserve%' to 'Disc%' here
-            'AMOUNT': 'Amount', 'TABLE INCL': 'Table Incl', 'TINC_NAME': 'TINC_NAME', 'SINC_NAME': 'SINC_NAME', 'DEP': 'Dep', 'TAB': 'Tab'
+            'AMOUNT': 'Amount', 'TABLE INCL': 'Table Incl', 'TINC_NAME': 'TINC_NAME', 'SINC_NAME': 'SINC_NAME', 'DEP': 'Dep', 'TAB': 'Tab',
+            'SGP COMMENT': 'SGPComment', 'SGPCOMMENT': 'SGPComment',
+            'KEYTOSYMBOL': 'KeyToSymbol', 'COMMENT': 'comment', 'COLOR DESC': 'Color Desc'
     }
     remarks = str(filter_rules.get('REMARKS', 'INCLUDE')).strip().upper()
 
@@ -336,6 +364,8 @@ def apply_tolerance_filter(df, filter_rules, tolerance_level):
             val_str = str(filter_value).strip().upper()
             if filter_col in INCLUSION_COLUMNS:
                 conditions.append(inclusion_condition(filtered_df[stock_col], val_str, tolerance_level))
+            elif filter_col in ['SGP COMMENT', 'SGPCOMMENT', 'KEYTOSYMBOL', 'COMMENT', 'COLOR DESC']:
+                conditions.append(build_long_text_filter_condition(filtered_df[stock_col], val_str))
             elif filter_col in ['SHP', 'CARAT', 'LAB']:
                 if filter_col == 'CARAT': cond = parse_carat_filter(filtered_df[stock_col], val_str)
                 else:
@@ -400,6 +430,41 @@ def classify_match_type(row, filter_rules):
     if deviation_count == 0: return 'Exact'
     elif deviation_count == 1: return 'Nearby'
     else: return 'Maybe'
+
+def classify_match_types_vectorized(df, filter_rules):
+    """Keep the original three Excel classes and colors; use the full rule.
+
+    A stone is Exact only if it passes the entire Filters.xlsx row without
+    tolerance.  A tolerance-only stone is Nearby unless the ORIGINAL grading
+    rule marks two or more Color/Qua/Flo deviations (original Maybe/white).
+    """
+    if df.empty:
+        return pd.Series(dtype=object, index=df.index)
+    deviations = pd.Series(0, index=df.index, dtype='int8')
+    for filter_col, stock_col in {'COLOR NAME': 'Color', 'QUA': 'Qua', 'FLO': 'Flo'}.items():
+        if filter_col not in filter_rules or stock_col not in df.columns:
+            continue
+        raw = filter_rules[filter_col]
+        if pd.isna(raw) or str(raw).strip() == '':
+            continue
+        order = ORDER_MAPPING[filter_col]
+        apply_map = ENABLE_FLO_MAPPING and filter_col == 'FLO'
+        exact_values = parse_filter_value(str(raw).strip().upper(), order, 0, apply_map)
+        values = df[stock_col].fillna('').astype(str).str.strip().str.upper()
+        if apply_map:
+            values = values.replace(['VSL', 'SL'], 'FNT')
+        deviations += (~values.isin(exact_values)).astype('int8')
+
+    result = pd.Series('Maybe', index=df.index, dtype=object)
+    result.loc[deviations == 0] = 'Exact'
+    result.loc[deviations == 1] = 'Nearby'
+    if str(filter_rules.get('REMARKS', '')).strip().upper() != 'EXCLUDE':
+        strict_matches = apply_tolerance_filter(df, filter_rules, tolerance_level=0)
+        strict_mask = pd.Series(df.index.isin(strict_matches.index), index=df.index)
+        result.loc[strict_mask] = 'Exact'
+        result.loc[~strict_mask & (result == 'Exact')] = 'Nearby'
+    return result
+
 
 def auto_adjust_column_widths(worksheet):
     for column in worksheet.columns:
@@ -476,7 +541,7 @@ def process_party_data(stocks_df, party_filter_rule, tolerance_level):
 
     if not final_df.empty:
         # 2. Classify stones
-        final_df['Match_Type'] = final_df.apply(lambda row: classify_match_type(row, party_filter_rule), axis=1)
+        final_df['Match_Type'] = classify_match_types_vectorized(final_df, party_filter_rule)
         final_df['Is_Filter_Match'] = True
 
         print(f"    Matches: {len(final_df)} | Breakdown: "

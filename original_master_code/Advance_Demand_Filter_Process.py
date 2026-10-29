@@ -900,22 +900,17 @@ def classify_match_types_vectorized(df, filter_rules):
     out.loc[deviation_count == 0] = 'Exact'
     out.loc[deviation_count == 1] = 'Nearby'
 
-    # Inclusion-column-only color correction: the original Excel styling is
-    # unchanged (Exact=green, Nearby=yellow, Maybe=white, across the full row).
-    # The original classifier considers only Color/Qua/Flo, so a stone admitted
-    # solely by tolerance on TINC_NAME/SINC_NAME (or an accompanying ordered
-    # filter in that same rule) was incorrectly painted green.  Classify such a
-    # stone as Nearby unless the COMPLETE rule also matches at tolerance zero.
-    # Do not change other parties' historical grading behavior or EXCLUDE rules.
-    uses_inclusion = any(
-        normalize_column_key(col) in {'TINCNAME', 'SINCNAME'}
-        and not pd.isna(value) and str(value).strip()
-        for col, value in filter_rules.items()
-    )
-    if uses_inclusion and str(filter_rules.get('REMARKS', '')).strip().upper() != 'EXCLUDE':
+    # Preserve original full-row Excel fills (green Exact, yellow Nearby, white
+    # Maybe) but base the Exact decision on ALL active columns of the rule,
+    # not only Color, Qua and Flo.  This covers every ordered inclusion/open/
+    # shade/cut characteristic, with the same zero-tolerance matcher as the
+    # actual stock selection.  Multiple Color/Qua/Flo deviations still retain
+    # the original Maybe class.
+    if str(filter_rules.get('REMARKS', '')).strip().upper() != 'EXCLUDE':
         strict_rows = apply_tolerance_filter(df, filter_rules, tolerance_level=0)
-        is_strict = pd.Series(df.index.isin(strict_rows.index), index=df.index)
-        out.loc[(out == 'Exact') & ~is_strict] = 'Nearby'
+        strict_mask = pd.Series(df.index.isin(strict_rows.index), index=df.index)
+        out.loc[strict_mask] = 'Exact'
+        out.loc[~strict_mask & (out == 'Exact')] = 'Nearby'
 
     return out
 
