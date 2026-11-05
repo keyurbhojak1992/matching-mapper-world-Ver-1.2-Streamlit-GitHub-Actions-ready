@@ -10,13 +10,6 @@ from pathlib import Path
 
 import streamlit as st
 
-from adapters.advanced_demand_filter_adapter import run_advanced_demand_filter
-from adapters.advanced_demand_checkpoint_adapter import (
-    batch_job_snapshot,
-    batch_output_path,
-    create_batch_job,
-    process_next_batch,
-)
 from adapters.auto_pricing_adapter import ACTION_NAMES as AUTO_PRICING_ACTION_NAMES, run_auto_pricing
 from adapters.auto_pricing_pipeline_adapter import (
     AutoPricingDataError,
@@ -24,22 +17,14 @@ from adapters.auto_pricing_pipeline_adapter import (
     preview_auto_pricing_column_mapping,
     run_auto_pricing_full_pipeline_from_files,
 )
-from adapters.bid_drop_adapter import run_bid_drop_checking
 from adapters.common import repository_data_path
-from adapters.dealmaker_adapter import bundled_dealmaker_control_bytes, run_dealmaker
-from adapters.filter_demand_adapter import run_filter_demand
-from adapters.layout_stock_matcher_adapter import run_layout_stock_matcher
+from adapters.dealmaker_adapter import bundled_dealmaker_control_bytes
 from adapters.pricing_last5_bid_adapter import (
     DEFAULT_LAST_N_BIDS,
     DEFAULT_OUTPUT_MODE,
     PRICING_LAST5_DEFAULTS,
     run_pricing_last5_bid_suggested,
 )
-from adapters.separate_adapter import run_separate_excel_files
-from adapters.sort_adapter import run_sorting_process
-from adapters.suggested_list_splitter_adapter import run_suggested_list_splitter
-from adapters.usa_suggested_stock_mapper_adapter import run_usa_suggested_stock_mapper
-from adapters.suggested_adapter import run_suggested_process
 from cloud_jobs.bundle import (
     FAILURE_ASSET_NAME,
     build_job_bundle,
@@ -65,6 +50,66 @@ from ui.config_controls import (
     parse_type_weights,
     unique_clean,
 )
+
+# Defer expensive processing imports until a user actually runs that operation.
+# This makes the initial Overview page cheaper to display after cloud startup.
+
+def run_advanced_demand_filter(*args, **kwargs):
+    from adapters.advanced_demand_filter_adapter import run_advanced_demand_filter as _implementation
+    return _implementation(*args, **kwargs)
+
+def batch_job_snapshot(*args, **kwargs):
+    from adapters.advanced_demand_checkpoint_adapter import batch_job_snapshot as _implementation
+    return _implementation(*args, **kwargs)
+
+def batch_output_path(*args, **kwargs):
+    from adapters.advanced_demand_checkpoint_adapter import batch_output_path as _implementation
+    return _implementation(*args, **kwargs)
+
+def create_batch_job(*args, **kwargs):
+    from adapters.advanced_demand_checkpoint_adapter import create_batch_job as _implementation
+    return _implementation(*args, **kwargs)
+
+def process_next_batch(*args, **kwargs):
+    from adapters.advanced_demand_checkpoint_adapter import process_next_batch as _implementation
+    return _implementation(*args, **kwargs)
+
+def run_bid_drop_checking(*args, **kwargs):
+    from adapters.bid_drop_adapter import run_bid_drop_checking as _implementation
+    return _implementation(*args, **kwargs)
+
+def run_dealmaker(*args, **kwargs):
+    from adapters.dealmaker_adapter import run_dealmaker as _implementation
+    return _implementation(*args, **kwargs)
+
+def run_filter_demand(*args, **kwargs):
+    from adapters.filter_demand_adapter import run_filter_demand as _implementation
+    return _implementation(*args, **kwargs)
+
+def run_layout_stock_matcher(*args, **kwargs):
+    from adapters.layout_stock_matcher_adapter import run_layout_stock_matcher as _implementation
+    return _implementation(*args, **kwargs)
+
+def run_separate_excel_files(*args, **kwargs):
+    from adapters.separate_adapter import run_separate_excel_files as _implementation
+    return _implementation(*args, **kwargs)
+
+def run_sorting_process(*args, **kwargs):
+    from adapters.sort_adapter import run_sorting_process as _implementation
+    return _implementation(*args, **kwargs)
+
+def run_suggested_list_splitter(*args, **kwargs):
+    from adapters.suggested_list_splitter_adapter import run_suggested_list_splitter as _implementation
+    return _implementation(*args, **kwargs)
+
+def run_usa_suggested_stock_mapper(*args, **kwargs):
+    from adapters.usa_suggested_stock_mapper_adapter import run_usa_suggested_stock_mapper as _implementation
+    return _implementation(*args, **kwargs)
+
+def run_suggested_process(*args, **kwargs):
+    from adapters.suggested_adapter import run_suggested_process as _implementation
+    return _implementation(*args, **kwargs)
+
 
 # Keep the Streamlit UI compatible with both the original GitHub worker
 # result name and the final-output worker. Defining these names here avoids
