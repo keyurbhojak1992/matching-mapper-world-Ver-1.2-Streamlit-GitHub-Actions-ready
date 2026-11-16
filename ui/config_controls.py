@@ -7,7 +7,6 @@ from functools import lru_cache
 from pathlib import Path
 from typing import BinaryIO, Iterable
 
-import pyarrow.parquet as pq
 from openpyxl import load_workbook
 
 
@@ -159,6 +158,7 @@ def _rewind(source: BinaryIO) -> None:
 
 def _parquet_values_stream(source: BinaryIO, candidates: set[str]) -> list[str]:
     """Read only matching Parquet columns from a seekable upload stream."""
+    import pyarrow.parquet as pq
     _rewind(source)
     try:
         parquet = pq.ParquetFile(source)
