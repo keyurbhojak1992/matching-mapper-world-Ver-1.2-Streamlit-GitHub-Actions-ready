@@ -11,12 +11,6 @@ from pathlib import Path
 import streamlit as st
 
 from adapters.auto_pricing_adapter import ACTION_NAMES as AUTO_PRICING_ACTION_NAMES, run_auto_pricing
-from adapters.auto_pricing_pipeline_adapter import (
-    AutoPricingDataError,
-    default_remove_party_bytes,
-    preview_auto_pricing_column_mapping,
-    run_auto_pricing_full_pipeline_from_files,
-)
 from adapters.common import repository_data_path
 from adapters.dealmaker_adapter import bundled_dealmaker_control_bytes
 from adapters.pricing_last5_bid_adapter import (
@@ -1329,6 +1323,15 @@ def pricing_last5_bid_page() -> None:
     _show_result("pricing_last5_result", "Download Last-BID suggested ZIP")
 
 def auto_pricing_page() -> None:
+    # Load the Excel-specific pipeline only on the Auto Pricing workspace.
+    # This keeps an optional dependency issue from blocking all other pages.
+    from adapters.auto_pricing_pipeline_adapter import (
+        AutoPricingDataError,
+        default_remove_party_bytes,
+        preview_auto_pricing_column_mapping,
+        run_auto_pricing_full_pipeline_from_files,
+    )
+
     section_header(
         "Sales, actions & price intelligence",
         "Auto Pricing",

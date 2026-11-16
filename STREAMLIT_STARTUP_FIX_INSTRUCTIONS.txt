@@ -1,0 +1,45 @@
+STREAMLIT STARTUP DEPENDENCY FIX - 16 NOVEMBER 2026
+
+WHAT FAILED
+The supplied screenshot reports ModuleNotFoundError while importing
+openpyxl from adapters/auto_pricing_pipeline_adapter.py during app startup.
+The supplied dependency list already included openpyxl, so this fix makes
+Cloud dependencies direct/explicit and prevents the Auto Pricing dependency
+from preventing unrelated workspaces from loading.
+
+ONLY 3 EXISTING FILES MODIFIED
+1. requirements.txt - flatten the same pinned dependencies used by the worker.
+2. app.py - defer loading the Auto Pricing Excel pipeline to its page.
+3. ui/config_controls.py - defer importing openpyxl until Excel input is read.
+
+NOT MODIFIED
+The matching/Auto Pricing processor implementations, defaults and data files,
+other adapters, UI layout, all 13 workspaces and the GitHub Actions worker.
+
+DEPLOYMENT (RECOMMENDED: PATCH ZIP)
+1. Create a backup/commit on your GitHub main branch first.
+2. Extract the PATCH ZIP. Replace ONLY app.py, requirements.txt and
+   ui/config_controls.py at those exact repository-relative paths.
+3. Commit the three updated files to the GitHub branch used by Streamlit.
+4. Reboot Streamlit Cloud and look for an import-free startup. If it still uses
+   Python 3.14.10, change the Python version to 3.12 by deleting and
+   redeploying the Streamlit app (you cannot switch an existing app in place).
+   Save your app's subdomain and secrets BEFORE deleting. In Advanced settings
+   choose Python 3.12 and entrypoint app.py. Deleting the app does NOT delete
+   its GitHub repository, but review Streamlit Cloud app settings/secrets.
+5. After startup, verify all 13 workspaces, especially Auto Pricing, with
+   your own representative inputs. No cloud deployment test was possible here.
+
+VERIFICATION
+- All Python source files passed compileall.
+- 41 relevant UI/Auto Pricing tests passed.
+- 2 unrelated Parquet tests were skipped because this test environment lacks
+  pyarrow, which is already in your deployment requirements.
+- UI configuration import succeeds even if openpyxl is deliberately blocked.
+- Only the 3 listed source files differ from the original upload.
+
+SUPPLIED PACKAGES
+PATCH ZIP: the 3 replacement files + this guide, for your existing repo.
+FULL ZIP: a copy of the supplied project's working files with the 3 fixes;
+ .git internals and temporary/test cache directories are omitted. Use PATCH
+ for safest updating of an existing GitHub repository.

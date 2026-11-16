@@ -7,7 +7,6 @@ from functools import lru_cache
 from pathlib import Path
 from typing import BinaryIO, Iterable
 
-from openpyxl import load_workbook
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -190,6 +189,8 @@ def _excel_values_stream(
     """Read selected Excel columns in read-only mode without copying the upload bytes."""
     _rewind(source)
     try:
+        from openpyxl import load_workbook
+
         workbook = load_workbook(source, read_only=True, data_only=True)
     except Exception:
         _rewind(source)
