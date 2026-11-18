@@ -31,6 +31,7 @@ from cloud_jobs.github_backend import (
     GitHubReleaseBackend,
 )
 from ui.download_fallback import MAX_INLINE_DOWNLOAD_BYTES, inline_download_link
+from ui.excel_dependencies import excel_dependency_error
 from ui.theme import apply_theme, hero, page_footer, section_header, sidebar_brand, sidebar_footer
 from ui.config_controls import (
     DEFAULT_PRIORITY_TYPES,
@@ -220,6 +221,22 @@ def _friendly_message(value: object, fallback: str = "The request could not be c
 def _show_user_error(context: str, exc: object | None = None) -> None:
     detail = _friendly_message(exc, "") if exc is not None else ""
     st.error(f"{context}{': ' + detail if detail else '.'}")
+
+
+def _excel_processing_ready() -> bool:
+    """Display actionable deployment guidance rather than starting a broken Excel job."""
+    problem = excel_dependency_error()
+    if problem is None:
+        return True
+    st.error(f"Excel processing is unavailable: {problem}")
+    st.info(
+        "Cloud deployment: check that requirements.txt is beside app.py, "
+        "contains openpyxl==3.1.5, and was committed to your deployed GitHub branch. "
+        "Rebuild or reboot the app to install the dependency. "
+        "Local installation: run python -m pip install -r requirements.txt using "
+        "the same Python interpreter that launches Streamlit."
+    )
+    return False
 
 
 def _show_result(key: str, label: str) -> None:
@@ -2017,6 +2034,8 @@ def demand_filter_page() -> None:
         "Apply your demand rules to Stock Actual and the Filters workbook. Reports are generated for each salesperson.",
         ["Upload stock", "Upload filters", "Set tolerance", "Download reports"],
     )
+    if not _excel_processing_ready():
+        return
     left, right = st.columns(2)
     stock = left.file_uploader("Stock Actual workbook *", type=["xlsx"], key="demand_stock")
     filters = right.file_uploader("Filters workbook *", type=["xlsx"], key="demand_filters")
@@ -2047,6 +2066,9 @@ def demand_filter_page() -> None:
 
 
 def advanced_demand_filter_page() -> None:
+    # A missing Excel dependency must be caught before loading saved jobs too.
+    if not _excel_processing_ready():
+        return
     # The job is stored on disk. Keep its unguessable resume token in the URL as
     # well as Streamlit session_state, because Streamlit uploads/session state may
     # disappear on a browser reconnect. A recovered job starts PAUSED to avoid
